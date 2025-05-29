@@ -35,13 +35,18 @@ module BatchAgg
 
           # Create subquery projections for each aggregate
           projections = aggregates.map do |name, config|
-            relation = config[:block].call(record)
+            relation = config[:block].call(record) # This is an ActiveRecord::Relation
 
-            # Get the Arel AST for the subquery
-            subquery_arel = relation.except(:select).select('COUNT(*)').arel
+            # Get the ActiveRecord::Relation for the subquery count
+            # This relation will have its own context for bind parameters (e.g., from record.id)
+            subquery_count_relation = relation.except(:select).select('COUNT(*)')
 
-            # Create a named projection
-            subquery_arel.as(name.to_s)
+            # Generate SQL for the subquery; ActiveRecord resolves its bind parameters here
+            subquery_sql = subquery_count_relation.to_sql
+
+            # Create a named projection using Arel.sql to treat the subquery SQL as a literal
+            # and then alias it with .as()
+            Arel.sql("(#{subquery_sql})").as(name.to_s)
           end
 
           # Build the main query
@@ -50,9 +55,7 @@ module BatchAgg
             .where(main_table[:id].eq(record.id))
 
           # Execute the query
-          puts query.to_sql
           result = ActiveRecord::Base.connection.select_all(query.to_sql)
-          puts result.inspect
 
           return OpenStruct.new(result.first)
         end
