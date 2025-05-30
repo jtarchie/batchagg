@@ -21,7 +21,7 @@ RSpec.describe "DSL" do
     end
   end
 
-  it "does something" do
+  it "for a single user" do
     user = User.create!(name: "Alice")
     10.times do |i|
       user.posts.create!(title: "Post #{i + 1}")
@@ -35,5 +35,25 @@ RSpec.describe "DSL" do
     agg = klass.only(user)
     expect(agg.total_posts).to eq(10)
     expect(agg.posts_with_title).to eq(1)
+  end
+
+  it "handles multiple users" do
+    user1 = User.create!(name: "Alice")
+    user2 = User.create!(name: "Bob")
+
+    5.times { |i| user1.posts.create!(title: "Post #{i + 1}") }
+    3.times { |i| user2.posts.create!(title: "Post #{i + 1}") }
+
+    klass = aggregate do
+      count(:total_posts) { |user| user.posts }
+      count(:posts_with_title) { |user| user.posts.where(title: "Post 1") }
+    end
+
+    results = klass.from(User.all)
+    expect(results[user1.id].total_posts).to eq(5)
+    expect(results[user1.id].posts_with_title).to eq(1)
+
+    expect(results[user2.id].total_posts).to eq(3)
+    expect(results[user2.id].posts_with_title).to eq(1)
   end
 end
