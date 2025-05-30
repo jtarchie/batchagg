@@ -66,15 +66,6 @@ module BatchAgg
       @base_model = base_model
     end
 
-    def build_query_for_record(record, aggregates)
-      main_table = @base_model.arel_table
-      projections = build_projections_for_single_record(record, aggregates)
-
-      main_table
-        .project(*projections)
-        .where(main_table[@base_model.primary_key].eq(record.id))
-    end
-
     def build_query_for_scope(scope, aggregates)
       outer_table_alias = @base_model.arel_table.alias("batchagg_outer_#{@base_model.table_name}")
       correlation_builder = CorrelatedRelationBuilder.new(@base_model, outer_table_alias)
@@ -86,13 +77,49 @@ module BatchAgg
         projections << Arel.sql("(#{subquery_sql})").as(aggregate_def.name.to_s)
       end
 
-      arel_query = Arel::SelectManager.new(@base_model.connection)
+      arel_query = Arel::SelectManager.new(scope.klass.connection) # Use connection from scope's class
       arel_query.from(outer_table_alias)
       arel_query.project(*projections)
 
-      if scope.where_clause.any?
+      # Apply WHERE conditions from the input scope to the outer_table_alias.
+      # This primarily uses where_values_hash for simple equality conditions.
+      # More complex conditions in the scope (e.g., involving OR, custom SQL strings, joins on other tables)
+      # might not be fully translated. A comprehensive solution would require
+      # an Arel visitor to parse and rewrite all conditions from scope.arel.constraints
+      # against outer_table_alias. This is a known complex problem.
+      processed_keys_from_where_values = []
+      if scope.respond_to?(:where_values_hash) && scope.where_values_hash.is_a?(Hash)
         scope.where_values_hash.each do |column_name, value|
-          arel_query.where(outer_table_alias[column_name.to_sym].eq(value))
+          column_name_str = column_name.to_s
+          if @base_model.columns_hash.key?(column_name_str)
+            arel_query.where(outer_table_alias[column_name.to_sym].eq(value))
+            processed_keys_from_where_values << column_name_str
+          end
+        end
+      end
+
+      # Attempt to handle other simple conditions from arel.constraints not covered by where_values_hash
+      # This focuses on conditions directly on the base model's table.
+      where_clauses = scope.arel.ast.cores.flat_map(&:wheres) # Get all where clauses from all cores
+      where_clauses.each do |constraint|
+        next unless constraint.left.is_a?(Arel::Attributes::Attribute) &&
+                    constraint.left.relation.name == @base_model.table_name &&
+                    !processed_keys_from_where_values.include?(constraint.left.name.to_s)
+
+        if constraint.is_a?(Arel::Nodes::Equality)
+          arel_query.where(outer_table_alias[constraint.left.name].eq(constraint.right))
+        elsif constraint.is_a?(Arel::Nodes::In)
+          # Ensure values for IN clause are literals if they are BindParam nodes
+          values = if constraint.right.is_a?(Array)
+                     constraint.right.map do |v|
+                       v.is_a?(Arel::Nodes::BindParam) ? v.value.value_before_type_cast : v
+                     end
+                   else
+                     constraint.right
+                   end
+          arel_query.where(outer_table_alias[constraint.left.name].in(values))
+          # Add more handlers for other Arel node types (e.g., NotEqual, GreaterThan) if deemed necessary
+          # and can be simply translated.
         end
       end
 
@@ -101,75 +128,27 @@ module BatchAgg
 
     private
 
-    def build_projections_for_single_record(record, aggregates)
-      aggregates.map do |aggregate|
-        build_projection_for_aggregate(record, aggregate)
-      end
-    end
-
-    def build_projection_for_aggregate(record, aggregate)
-      relation = aggregate.block.call(record)
-      subquery = build_subquery_for_aggregate(relation, aggregate)
-      Arel.sql("(#{subquery})").as(aggregate.name.to_s)
-    end
-
     def build_subquery_for_aggregate(relation, aggregate_def)
+      # `relation` is an ActiveRecord_Relation (e.g., Post.where(...))
+      # `relation.model.arel_table` gives the Arel::Table for that relation (e.g., posts table)
+      subject_table = relation.model.arel_table
+      base_query = relation.except(:select) # Start with the correlated relation
+
       case aggregate_def.type
       when :count
-        relation.except(:select).select(Arel.star.count).to_sql
+        base_query.select(Arel.star.count).to_sql
       when :sum
-        column = aggregate_def.column
-        qualified_column = relation.arel_table[column]
-        relation.except(:select).select(qualified_column.sum).to_sql
+        base_query.select(subject_table[aggregate_def.column].sum).to_sql
       when :sum_expression
-        expression = aggregate_def.expression
-        relation.except(:select).select(Arel.sql("SUM(#{expression})")).to_sql
+        base_query.select(Arel.sql("SUM(#{aggregate_def.expression})")).to_sql
       when :avg
-        column = aggregate_def.column
-        qualified_column = relation.arel_table[column]
-        relation.except(:select).select(qualified_column.average).to_sql
+        base_query.select(subject_table[aggregate_def.column].average).to_sql
       when :min
-        column = aggregate_def.column
-        qualified_column = relation.arel_table[column]
-        relation.except(:select).select(qualified_column.minimum).to_sql
+        base_query.select(subject_table[aggregate_def.column].minimum).to_sql
       when :max
-        column = aggregate_def.column
-        qualified_column = relation.arel_table[column]
-        relation.except(:select).select(qualified_column.maximum).to_sql
+        base_query.select(subject_table[aggregate_def.column].maximum).to_sql
       else
         raise ArgumentError, "Unsupported aggregate type: #{aggregate_def.type}"
-      end
-    end
-  end
-
-  class SingleRecordResult
-    def initialize(record, aggregates, base_model)
-      @record = record
-      @aggregates = aggregates
-      @query_builder = QueryBuilder.new(base_model)
-      @results = execute_query
-      add_aggregate_methods
-    end
-
-    attr_reader :record
-
-    private
-
-    def execute_query
-      query = @query_builder.build_query_for_record(@record, @aggregates)
-      result = @record.class.connection.select_all(query.to_sql) # Use record's class for connection
-      result.first || {}
-    end
-
-    def add_aggregate_methods
-      @aggregates.each do |aggregate|
-        define_aggregate_method(aggregate.name)
-      end
-    end
-
-    def define_aggregate_method(name)
-      define_singleton_method(name) do
-        @results[name.to_s]
       end
     end
   end
@@ -194,23 +173,38 @@ module BatchAgg
     end
 
     def only(record)
-      # Create a scope containing only this record
       scope = @base_model.where(@base_model.primary_key => record.id)
-
-      # Use the from method to get results
       from(scope)
     end
 
     def from(scope)
       query_arel = @query_builder.build_query_for_scope(scope, @aggregates)
-      # Use the connection from the base model of the scope
       results_array = scope.klass.connection.select_all(query_arel.to_sql).to_a
 
       results_array.each_with_object({}) do |row_hash, memo|
-        # The primary key might be returned as a string from DB, ensure it matches type if needed for lookup
-        record_id = row_hash[@base_model.primary_key.to_s]
-        memo[record_id] = MultipleRecordsResultItem.new(row_hash, @aggregates)
+        record_id_from_db = row_hash[@base_model.primary_key.to_s]
+        casted_record_id = cast_id_for_hash_key(record_id_from_db, scope.klass)
+        memo[casted_record_id] = MultipleRecordsResultItem.new(row_hash, @aggregates)
       end
+    end
+
+    private
+
+    def cast_id_for_hash_key(id_value, model_class)
+      # Ensure the ID used as a hash key is of the expected type,
+      # matching how record.id would behave.
+      pk_column = model_class.columns_hash[model_class.primary_key]
+      # Use ActiveRecord's type casting for the primary key.
+      # This handles integers, UUIDs, etc., correctly.
+      # pk_column.type returns the type symbol (e.g., :integer, :string)
+      # pk_column.limit, pk_column.precision, pk_column.scale provide the necessary options
+      type = ActiveRecord::Type.lookup(
+        pk_column.type,
+        limit: pk_column.limit,
+        precision: pk_column.precision,
+        scale: pk_column.scale
+      )
+      type.deserialize(id_value)
     end
   end
 
@@ -220,34 +214,36 @@ module BatchAgg
       @aggregates = []
     end
 
+    private
+
+    def add_aggregate(type, name, block, column: nil, expression: nil)
+      @aggregates << AggregateDefinition.new(name, type, block, column, expression)
+    end
+
+    public
+
     def count(name, &block)
-      aggregate = AggregateDefinition.new(name, :count, block)
-      @aggregates << aggregate
+      add_aggregate(:count, name, block)
     end
 
     def sum(name, column, &block)
-      aggregate = AggregateDefinition.new(name, :sum, block, column)
-      @aggregates << aggregate
+      add_aggregate(:sum, name, block, column: column)
     end
 
     def sum_expression(name, expression, &block)
-      aggregate = AggregateDefinition.new(name, :sum_expression, block, nil, expression)
-      @aggregates << aggregate
+      add_aggregate(:sum_expression, name, block, expression: expression)
     end
 
     def avg(name, column, &block)
-      aggregate = AggregateDefinition.new(name, :avg, block, column)
-      @aggregates << aggregate
+      add_aggregate(:avg, name, block, column: column)
     end
 
     def min(name, column, &block)
-      aggregate = AggregateDefinition.new(name, :min, block, column)
-      @aggregates << aggregate
+      add_aggregate(:min, name, block, column: column)
     end
 
     def max(name, column, &block)
-      aggregate = AggregateDefinition.new(name, :max, block, column)
-      @aggregates << aggregate
+      add_aggregate(:max, name, block, column: column)
     end
 
     def build_class
@@ -256,12 +252,8 @@ module BatchAgg
   end
 end
 
-def aggregate(&block)
-  # For now, assume User as the base model
-  # In the future, this could be made configurable
-  # This global `User` might need to be passed in or configured if not always User.
-  # For the test setup, User model is globally available.
-  builder = BatchAgg::AggregateBuilder.new(User)
+def aggregate(base_model, &block)
+  builder = BatchAgg::AggregateBuilder.new(base_model)
   builder.instance_eval(&block)
   builder.build_class
 end

@@ -30,9 +30,9 @@ RSpec.describe 'DSL' do
       user.posts.create!(title: "Post #{i + 1}")
     end
 
-    klass = aggregate do
+    klass = aggregate(User) do # Pass User model
       count(:total_posts, &:posts)
-      count(:posts_with_title) { |user| user.posts.where(title: 'Post 1') }
+      count(:posts_with_title) { |user_scope| user_scope.posts.where(title: 'Post 1') } # Renamed block arg
     end
 
     agg = klass.only(user)
@@ -47,9 +47,9 @@ RSpec.describe 'DSL' do
     5.times { |i| user1.posts.create!(title: "Post #{i + 1}") }
     3.times { |i| user2.posts.create!(title: "Post #{i + 1}") }
 
-    klass = aggregate do
+    klass = aggregate(User) do # Pass User model
       count(:total_posts, &:posts)
-      count(:posts_with_title) { |user| user.posts.where(title: 'Post 1') }
+      count(:posts_with_title) { |user_scope| user_scope.posts.where(title: 'Post 1') } # Renamed block arg
     end
 
     results = klass.from(User.all)
@@ -68,7 +68,7 @@ RSpec.describe 'DSL' do
     user.posts.create!(title: 'Post 2', views: 200)
     user.posts.create!(title: 'Post 3', views: 300)
 
-    klass = aggregate do
+    klass = aggregate(User) do # Pass User model
       count(:total_posts, &:posts)
       sum(:total_views, :views, &:posts)
       avg(:avg_views, :views, &:posts)
@@ -79,7 +79,9 @@ RSpec.describe 'DSL' do
     agg = klass.only(user)
     expect(agg[user.id].total_posts).to eq(3)
     expect(agg[user.id].total_views).to eq(600)
-    expect(agg[user.id].avg_views).to eq(200.0)
+    # Averages can be BigDecimal; convert to float for comparison if needed, or compare BigDecimal directly.
+    # SQLite AVG returns float by default.
+    expect(agg[user.id].avg_views.to_f).to eq(200.0)
     expect(agg[user.id].min_views).to eq(100)
     expect(agg[user.id].max_views).to eq(300)
   end
@@ -93,7 +95,7 @@ RSpec.describe 'DSL' do
     user.posts.create!(title: 'Post 1', views: 100)
     user.posts.create!(title: 'Post 2', views: 200)
 
-    klass = aggregate do
+    klass = aggregate(User) do # Pass User model
       sum(:total_post_views, :views, &:posts) # Should use posts.views, not users.views
     end
 
@@ -111,7 +113,7 @@ RSpec.describe 'DSL' do
     user.posts.create!(title: 'Post 2', views: 200, likes: 20)
     user.posts.create!(title: 'Post 3', views: 150, likes: 15)
 
-    klass = aggregate do
+    klass = aggregate(User) do # Pass User model
       sum_expression(:total_engagement, 'views + likes', &:posts)
       sum_expression(:weighted_score, 'views * 2 + likes * 5', &:posts)
     end
