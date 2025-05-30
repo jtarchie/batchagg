@@ -196,7 +196,11 @@ module BatchAgg
     end
 
     def only(record)
-      SingleRecordResult.new(record, @aggregates, @base_model)
+      # Create a scope containing only this record
+      scope = @base_model.where(@base_model.primary_key => record.id)
+
+      # Use the from method to get results
+      return from(scope)
     end
 
     def from(scope)

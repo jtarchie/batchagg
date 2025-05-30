@@ -33,8 +33,8 @@ RSpec.describe "DSL" do
     end
 
     agg = klass.only(user)
-    expect(agg.total_posts).to eq(10)
-    expect(agg.posts_with_title).to eq(1)
+    expect(agg[user.id].total_posts).to eq(10)
+    expect(agg[user.id].posts_with_title).to eq(1)
   end
 
   it "handles multiple users" do
