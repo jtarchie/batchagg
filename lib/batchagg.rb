@@ -5,14 +5,15 @@ require 'active_record' # Ensure ActiveRecord is available for Arel
 
 module BatchAgg
   class AggregateDefinition
-    attr_reader :name, :type, :block, :column, :expression
+    attr_reader :name, :type, :block, :column, :expression, :options
 
-    def initialize(name, type, block, column = nil, expression = nil)
+    def initialize(name, type, block, column = nil, expression = nil, options = nil)
       @name = name
       @type = type
       @block = block
       @column = column
       @expression = expression
+      @options = options
     end
   end
 
@@ -137,6 +138,8 @@ module BatchAgg
       case aggregate_def.type
       when :count
         base_query.select(Arel.star.count).to_sql
+      when :count_distinct
+        base_query.select(subject_table[aggregate_def.column].count(true)).to_sql # true for DISTINCT
       when :sum
         base_query.select(subject_table[aggregate_def.column].sum).to_sql
       when :sum_expression
@@ -147,6 +150,16 @@ module BatchAgg
         base_query.select(subject_table[aggregate_def.column].minimum).to_sql
       when :max
         base_query.select(subject_table[aggregate_def.column].maximum).to_sql
+      when :string_agg # New case
+        delimiter = aggregate_def.options&.dig(:delimiter) # Safely access delimiter
+
+        # For SQLite, GROUP_CONCAT(expr, delimiter) or GROUP_CONCAT(expr)
+        # Arel doesn't have a direct helper for GROUP_CONCAT's optional second arg in a cross-db way.
+        # We build it using Arel::Nodes::NamedFunction.
+        args = [subject_table[aggregate_def.column]]
+        args << Arel::Nodes.build_quoted(delimiter) if delimiter
+
+        base_query.select(Arel::Nodes::NamedFunction.new('GROUP_CONCAT', args)).to_sql
       else
         raise ArgumentError, "Unsupported aggregate type: #{aggregate_def.type}"
       end
@@ -216,14 +229,18 @@ module BatchAgg
 
     private
 
-    def add_aggregate(type, name, block, column: nil, expression: nil)
-      @aggregates << AggregateDefinition.new(name, type, block, column, expression)
+    def add_aggregate(type, name, block, column: nil, expression: nil, options: nil)
+      @aggregates << AggregateDefinition.new(name, type, block, column, expression, options)
     end
 
     public
 
     def count(name, &block)
       add_aggregate(:count, name, block)
+    end
+
+    def count_distinct(name, column, &block)
+      add_aggregate(:count_distinct, name, block, column: column)
     end
 
     def sum(name, column, &block)
@@ -244,6 +261,10 @@ module BatchAgg
 
     def max(name, column, &block)
       add_aggregate(:max, name, block, column: column)
+    end
+
+    def string_agg(name, column, delimiter: nil, &block)
+      add_aggregate(:string_agg, name, block, column: column, options: { delimiter: delimiter })
     end
 
     def build_class

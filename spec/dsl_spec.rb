@@ -122,4 +122,51 @@ RSpec.describe 'DSL' do
     expect(agg[user.id].total_engagement).to eq(495) # (100+10) + (200+20) + (150+15)
     expect(agg[user.id].weighted_score).to eq(1125) # (100*2+10*5) + (200*2+20*5) + (150*2+15*5)
   end
+
+  it 'handles distinct count aggregation' do
+    user = User.create!(name: 'Alice')
+    user.posts.create!(title: 'Post A', views: 100) # Assume Post has a category_id
+    user.posts.create!(title: 'Post B', views: 200)
+    user.posts.create!(title: 'Post C', views: 100)
+
+    # Setup: Add category_id to posts for this test
+    Post.connection.add_column Post.table_name, :category_id, :integer
+    Post.reset_column_information
+    user.posts.first.update!(category_id: 1)
+    user.posts.second.update!(category_id: 2)
+    user.posts.third.update!(category_id: 1)
+
+    klass = aggregate(User) do
+      count_distinct(:unique_categories, :category_id, &:posts)
+      count_distinct(:distinct_view_counts, :views, &:posts)
+    end
+
+    agg = klass.only(user)
+    expect(agg[user.id].unique_categories).to eq(2) # Categories 1 and 2
+    expect(agg[user.id].distinct_view_counts).to eq(2) # View counts 100 and 200
+
+    # Teardown: Remove category_id if it interferes with other tests
+    # Or ensure it's scoped within this test or a context block
+    Post.connection.remove_column Post.table_name, :category_id
+    Post.reset_column_information
+  end
+
+  it 'handles string aggregation' do
+    user = User.create!(name: 'Alice')
+    user.posts.create!(title: 'First Post')
+    user.posts.create!(title: 'Second Post')
+    user.posts.create!(title: 'Third Post')
+
+    klass = aggregate(User) do
+      string_agg(:all_post_titles, :title, delimiter: '; ', &:posts)
+    end
+
+    agg = klass.only(user)
+    # Order might not be guaranteed by default with GROUP_CONCAT unless an ORDER BY is in the subquery
+    # For testing, we might need to sort the expected string or ensure the test data inserts in a fixed order
+    # and the DB respects that for GROUP_CONCAT without explicit ordering.
+    # For simplicity here, let's assume a consistent order or match as a set.
+    titles = agg[user.id].all_post_titles.split('; ').sort
+    expect(titles).to match_array(['First Post', 'Second Post', 'Third Post'])
+  end
 end
