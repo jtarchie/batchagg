@@ -83,4 +83,21 @@ RSpec.describe 'DSL' do
     expect(agg[user.id].min_views).to eq(100)
     expect(agg[user.id].max_views).to eq(300)
   end
+
+  it 'handles overlapping column names between models' do
+    # Add a views column to User model to test conflict resolution
+    User.connection.add_column User.table_name, :views, :integer, default: 0
+    User.reset_column_information
+
+    user = User.create!(name: 'Alice', views: 50)
+    user.posts.create!(title: 'Post 1', views: 100)
+    user.posts.create!(title: 'Post 2', views: 200)
+
+    klass = aggregate do
+      sum(:total_post_views, :views, &:posts) # Should use posts.views, not users.views
+    end
+
+    agg = klass.only(user)
+    expect(agg[user.id].total_post_views).to eq(300) # Sum of post views, not user views
+  end
 end

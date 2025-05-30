@@ -118,16 +118,20 @@ module BatchAgg
         relation.except(:select).select(Arel.star.count).to_sql
       when :sum
         column = aggregate_def.column
-        relation.except(:select).select(Arel.sql("SUM(#{column})")).to_sql
+        qualified_column = relation.arel_table[column]
+        relation.except(:select).select(qualified_column.sum).to_sql
       when :avg
         column = aggregate_def.column
-        relation.except(:select).select(Arel.sql("AVG(#{column})")).to_sql
+        qualified_column = relation.arel_table[column]
+        relation.except(:select).select(qualified_column.average).to_sql
       when :min
         column = aggregate_def.column
-        relation.except(:select).select(Arel.sql("MIN(#{column})")).to_sql
+        qualified_column = relation.arel_table[column]
+        relation.except(:select).select(qualified_column.minimum).to_sql
       when :max
         column = aggregate_def.column
-        relation.except(:select).select(Arel.sql("MAX(#{column})")).to_sql
+        qualified_column = relation.arel_table[column]
+        relation.except(:select).select(qualified_column.maximum).to_sql
       else
         raise ArgumentError, "Unsupported aggregate type: #{aggregate_def.type}"
       end
