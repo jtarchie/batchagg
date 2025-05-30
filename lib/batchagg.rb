@@ -146,10 +146,16 @@ module BatchAgg
         base_query.select(Arel.sql("SUM(#{aggregate_def.expression})")).to_sql
       when :avg
         base_query.select(subject_table[aggregate_def.column].average).to_sql
+      when :avg_expression
+        base_query.select(Arel.sql("AVG(#{aggregate_def.expression})")).to_sql
       when :min
         base_query.select(subject_table[aggregate_def.column].minimum).to_sql
+      when :min_expression
+        base_query.select(Arel.sql("MIN(#{aggregate_def.expression})")).to_sql
       when :max
         base_query.select(subject_table[aggregate_def.column].maximum).to_sql
+      when :max_expression
+        base_query.select(Arel.sql("MAX(#{aggregate_def.expression})")).to_sql
       when :string_agg # New case
         delimiter = aggregate_def.options&.dig(:delimiter) # Safely access delimiter
 
@@ -255,12 +261,24 @@ module BatchAgg
       add_aggregate(:avg, name, block, column: column)
     end
 
+    def avg_expression(name, expression, &block)
+      add_aggregate(:avg_expression, name, block, expression: expression)
+    end
+
     def min(name, column, &block)
       add_aggregate(:min, name, block, column: column)
     end
 
+    def min_expression(name, expression, &block)
+      add_aggregate(:min_expression, name, block, expression: expression)
+    end
+
     def max(name, column, &block)
       add_aggregate(:max, name, block, column: column)
+    end
+
+    def max_expression(name, expression, &block)
+      add_aggregate(:max_expression, name, block, expression: expression)
     end
 
     def string_agg(name, column, delimiter: nil, &block)

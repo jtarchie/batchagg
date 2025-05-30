@@ -169,4 +169,44 @@ RSpec.describe 'DSL' do
     titles = agg[user.id].all_post_titles.split('; ').sort
     expect(titles).to match_array(['First Post', 'Second Post', 'Third Post'])
   end
+
+  it 'handles expression-based avg, min, max aggregations' do
+    # Add columns for testing expressions
+    Post.connection.add_column Post.table_name, :score, :integer, default: 0
+    Post.connection.add_column Post.table_name, :bonus, :integer, default: 0
+    Post.reset_column_information
+
+    user = User.create!(name: 'Alice')
+    user.posts.create!(title: 'Post 1', score: 10, bonus: 1) # score + bonus = 11
+    user.posts.create!(title: 'Post 2', score: 20, bonus: 2) # score + bonus = 22
+    user.posts.create!(title: 'Post 3', score: 30, bonus: 3) # score + bonus = 33
+
+    klass = aggregate(User) do
+      avg_expression(:avg_total_score, 'score + bonus', &:posts)
+      min_expression(:min_total_score, 'score + bonus', &:posts)
+      max_expression(:max_total_score, 'score + bonus', &:posts)
+      avg_expression(:avg_score_times_two, 'score * 2', &:posts)
+      min_expression(:min_score_plus_five, 'score + 5', &:posts)
+      max_expression(:max_bonus_doubled, 'bonus * 2', &:posts)
+    end
+
+    agg = klass.only(user)
+
+    # (11 + 22 + 33) / 3 = 66 / 3 = 22
+    expect(agg[user.id].avg_total_score.to_f).to eq(22.0)
+    expect(agg[user.id].min_total_score).to eq(11) # min(11, 22, 33)
+    expect(agg[user.id].max_total_score).to eq(33) # max(11, 22, 33)
+
+    # (10*2 + 20*2 + 30*2) / 3 = (20 + 40 + 60) / 3 = 120 / 3 = 40
+    expect(agg[user.id].avg_score_times_two.to_f).to eq(40.0)
+    # min(10+5, 20+5, 30+5) = min(15, 25, 35)
+    expect(agg[user.id].min_score_plus_five).to eq(15)
+    # max(1*2, 2*2, 3*2) = max(2, 4, 6)
+    expect(agg[user.id].max_bonus_doubled).to eq(6)
+
+    # Teardown
+    Post.connection.remove_column Post.table_name, :score
+    Post.connection.remove_column Post.table_name, :bonus
+    Post.reset_column_information
+  end
 end
