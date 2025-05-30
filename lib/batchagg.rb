@@ -5,12 +5,13 @@ require 'active_record' # Ensure ActiveRecord is available for Arel
 
 module BatchAgg
   class AggregateDefinition
-    attr_reader :name, :type, :block
+    attr_reader :name, :type, :block, :column
 
-    def initialize(name, type, block)
+    def initialize(name, type, block, column = nil)
       @name = name
       @type = type
       @block = block
+      @column = column
     end
   end
 
@@ -74,54 +75,25 @@ module BatchAgg
     end
 
     def build_query_for_scope(scope, aggregates)
-      # Alias for the main table in the outer query (e.g., "users" AS "batchagg_outer_users")
       outer_table_alias = @base_model.arel_table.alias("batchagg_outer_#{@base_model.table_name}")
-
-      # Builder to create correlated relations for subqueries
       correlation_builder = CorrelatedRelationBuilder.new(@base_model, outer_table_alias)
-
-      # Projections: start with the primary key of the base model from the aliased table
       projections = [outer_table_alias[@base_model.primary_key].as(@base_model.primary_key.to_s)]
 
       aggregates.each do |aggregate_def|
-        # The block is called with the correlation_builder.
-        # e.g., for a block `{|user| user.posts.where(title: 'P1')}`:
-        # 1. `correlation_builder.posts` is called, returning `Post.where(posts.user_id: outer_table_alias.id)`
-        # 2. `.where(title: 'P1')` is then called on that returned relation.
         correlated_relation = aggregate_def.block.call(correlation_builder)
-
-        # Build the count subquery SQL from this correlated_relation
-        # Assuming all aggregates are counts for now, as per `build_count_subquery`
-        subquery_sql = correlated_relation.except(:select).select(Arel.star.count).to_sql
+        subquery_sql = build_subquery_for_aggregate(correlated_relation, aggregate_def)
         projections << Arel.sql("(#{subquery_sql})").as(aggregate_def.name.to_s)
       end
 
-      # Construct the main Arel query
-      # SELECT outer_table_alias.id, (subquery1) AS agg1, ...
-      # FROM "base_table_name" AS outer_table_alias
-      # WHERE <conditions from the original scope, but applied to outer_table_alias>
-      arel_query = Arel::SelectManager.new(@base_model.connection) # Use connection from the base model
+      arel_query = Arel::SelectManager.new(@base_model.connection)
       arel_query.from(outer_table_alias)
       arel_query.project(*projections)
 
-      # Apply WHERE conditions from the input 'scope' to the 'outer_table_alias'
-      # This is a simplified way to handle common where clauses.
-      # A full Arel tree transformation would be more robust for complex scopes.
       if scope.where_clause.any?
-        # For simple hash conditions like `User.where(name: "Alice", status: 1)`
         scope.where_values_hash.each do |column_name, value|
           arel_query.where(outer_table_alias[column_name.to_sym].eq(value))
         end
-        # For other types of conditions, this would need more advanced Arel manipulation.
-        # The test uses `User.all`, so `where_values_hash` will be empty.
-        # If `scope.arel.constraints` are present and not covered by `where_values_hash`,
-        # they would need transformation. For `User.all`, `constraints` is empty.
       end
-      # If the scope has specific IDs (e.g. from `User.where(id: [1,2,3])`)
-      # This is often handled by `where_values_hash` if `id` is a string/symbol key.
-      # If `scope` was built like `User.find([1,2,3])`, `scope.where_values_hash` might not capture it directly
-      # in all Rails versions in the same way as `User.where(id: [1,2,3])`.
-      # However, `User.all` has no such constraints.
 
       arel_query
     end
@@ -135,15 +107,30 @@ module BatchAgg
     end
 
     def build_projection_for_aggregate(record, aggregate)
-      # This is for the single record case
       relation = aggregate.block.call(record)
-      subquery = build_count_subquery(relation)
+      subquery = build_subquery_for_aggregate(relation, aggregate)
       Arel.sql("(#{subquery})").as(aggregate.name.to_s)
     end
 
-    def build_count_subquery(relation)
-      # This method is used by both single and multiple record query paths
-      relation.except(:select).select(Arel.star.count).to_sql
+    def build_subquery_for_aggregate(relation, aggregate_def)
+      case aggregate_def.type
+      when :count
+        relation.except(:select).select(Arel.star.count).to_sql
+      when :sum
+        column = aggregate_def.column
+        relation.except(:select).select(Arel.sql("SUM(#{column})")).to_sql
+      when :avg
+        column = aggregate_def.column
+        relation.except(:select).select(Arel.sql("AVG(#{column})")).to_sql
+      when :min
+        column = aggregate_def.column
+        relation.except(:select).select(Arel.sql("MIN(#{column})")).to_sql
+      when :max
+        column = aggregate_def.column
+        relation.except(:select).select(Arel.sql("MAX(#{column})")).to_sql
+      else
+        raise ArgumentError, "Unsupported aggregate type: #{aggregate_def.type}"
+      end
     end
   end
 
@@ -227,6 +214,26 @@ module BatchAgg
 
     def count(name, &block)
       aggregate = AggregateDefinition.new(name, :count, block)
+      @aggregates << aggregate
+    end
+
+    def sum(name, column, &block)
+      aggregate = AggregateDefinition.new(name, :sum, block, column)
+      @aggregates << aggregate
+    end
+
+    def avg(name, column, &block)
+      aggregate = AggregateDefinition.new(name, :avg, block, column)
+      @aggregates << aggregate
+    end
+
+    def min(name, column, &block)
+      aggregate = AggregateDefinition.new(name, :min, block, column)
+      @aggregates << aggregate
+    end
+
+    def max(name, column, &block)
+      aggregate = AggregateDefinition.new(name, :max, block, column)
       @aggregates << aggregate
     end
 

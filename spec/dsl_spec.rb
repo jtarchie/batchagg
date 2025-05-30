@@ -16,6 +16,7 @@ RSpec.describe 'DSL' do
   with_model :Post do
     table do |t|
       t.string :title
+      t.integer :views, default: 0
       t.belongs_to :user
     end
     model do
@@ -57,5 +58,29 @@ RSpec.describe 'DSL' do
 
     expect(results[user2.id].total_posts).to eq(3)
     expect(results[user2.id].posts_with_title).to eq(1)
+  end
+
+  it 'handles different aggregate functions' do
+    user = User.create!(name: 'Alice')
+
+    # Add some posts with different values for aggregation
+    user.posts.create!(title: 'Post 1', views: 100)
+    user.posts.create!(title: 'Post 2', views: 200)
+    user.posts.create!(title: 'Post 3', views: 300)
+
+    klass = aggregate do
+      count(:total_posts, &:posts)
+      sum(:total_views, :views, &:posts)
+      avg(:avg_views, :views, &:posts)
+      min(:min_views, :views, &:posts)
+      max(:max_views, :views, &:posts)
+    end
+
+    agg = klass.only(user)
+    expect(agg[user.id].total_posts).to eq(3)
+    expect(agg[user.id].total_views).to eq(600)
+    expect(agg[user.id].avg_views).to eq(200.0)
+    expect(agg[user.id].min_views).to eq(100)
+    expect(agg[user.id].max_views).to eq(300)
   end
 end
