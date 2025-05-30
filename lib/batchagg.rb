@@ -44,26 +44,35 @@ module BatchAgg
     end
   end
 
-  class AggregateResult
+  class SingleRecordResult
     def initialize(record, aggregates, base_model)
       @record = record
       @aggregates = aggregates
       @query_builder = QueryBuilder.new(base_model)
       @results = execute_query
+      add_aggregate_methods
     end
 
     attr_reader :record
-
-    def get_aggregate_value(name)
-      @results[name.to_s]
-    end
 
     private
 
     def execute_query
       query = @query_builder.build_query_for_record(@record, @aggregates)
       result = ActiveRecord::Base.connection.select_all(query.to_sql)
-      OpenStruct.new(result.first)
+      result.first || {}
+    end
+
+    def add_aggregate_methods
+      @aggregates.each do |aggregate|
+        define_aggregate_method(aggregate.name)
+      end
+    end
+
+    def define_aggregate_method(name)
+      define_singleton_method(name) do
+        @results[name.to_s]
+      end
     end
   end
 
@@ -73,24 +82,8 @@ module BatchAgg
       @base_model = base_model
     end
 
-    def new(record)
-      result = AggregateResult.new(record, @aggregates, @base_model)
-      add_aggregate_methods(result)
-      result
-    end
-
-    private
-
-    def add_aggregate_methods(result)
-      @aggregates.each do |aggregate|
-        define_aggregate_method(result, aggregate.name)
-      end
-    end
-
-    def define_aggregate_method(result, name)
-      result.define_singleton_method(name) do
-        get_aggregate_value(name)
-      end
+    def only(record)
+      SingleRecordResult.new(record, @aggregates, @base_model)
     end
   end
 

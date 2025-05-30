@@ -32,7 +32,7 @@ RSpec.describe "DSL" do
       count(:posts_with_title) { |user| user.posts.where(title: "Post 1") }
     end
 
-    agg = klass.new(user)
+    agg = klass.only(user)
     expect(agg.total_posts).to eq(10)
     expect(agg.posts_with_title).to eq(1)
   end
