@@ -5,13 +5,14 @@ require 'active_record' # Ensure ActiveRecord is available for Arel
 
 module BatchAgg
   class AggregateDefinition
-    attr_reader :name, :type, :block, :column
+    attr_reader :name, :type, :block, :column, :expression
 
-    def initialize(name, type, block, column = nil)
+    def initialize(name, type, block, column = nil, expression = nil)
       @name = name
       @type = type
       @block = block
       @column = column
+      @expression = expression
     end
   end
 
@@ -120,6 +121,9 @@ module BatchAgg
         column = aggregate_def.column
         qualified_column = relation.arel_table[column]
         relation.except(:select).select(qualified_column.sum).to_sql
+      when :sum_expression
+        expression = aggregate_def.expression
+        relation.except(:select).select(Arel.sql("SUM(#{expression})")).to_sql
       when :avg
         column = aggregate_def.column
         qualified_column = relation.arel_table[column]
@@ -223,6 +227,11 @@ module BatchAgg
 
     def sum(name, column, &block)
       aggregate = AggregateDefinition.new(name, :sum, block, column)
+      @aggregates << aggregate
+    end
+
+    def sum_expression(name, expression, &block)
+      aggregate = AggregateDefinition.new(name, :sum_expression, block, nil, expression)
       @aggregates << aggregate
     end
 

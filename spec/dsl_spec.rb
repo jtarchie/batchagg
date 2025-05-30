@@ -100,4 +100,24 @@ RSpec.describe 'DSL' do
     agg = klass.only(user)
     expect(agg[user.id].total_post_views).to eq(300) # Sum of post views, not user views
   end
+
+  it 'handles complex aggregations with expressions' do
+    # Add a likes column to Post model for testing complex expressions
+    Post.connection.add_column Post.table_name, :likes, :integer, default: 0
+    Post.reset_column_information
+
+    user = User.create!(name: 'Alice')
+    user.posts.create!(title: 'Post 1', views: 100, likes: 10)
+    user.posts.create!(title: 'Post 2', views: 200, likes: 20)
+    user.posts.create!(title: 'Post 3', views: 150, likes: 15)
+
+    klass = aggregate do
+      sum_expression(:total_engagement, 'views + likes', &:posts)
+      sum_expression(:weighted_score, 'views * 2 + likes * 5', &:posts)
+    end
+
+    agg = klass.only(user)
+    expect(agg[user.id].total_engagement).to eq(495) # (100+10) + (200+20) + (150+15)
+    expect(agg[user.id].weighted_score).to eq(1125) # (100*2+10*5) + (200*2+20*5) + (150*2+15*5)
+  end
 end
