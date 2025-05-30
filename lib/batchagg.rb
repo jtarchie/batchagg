@@ -1,5 +1,7 @@
-require "ostruct"
-require "active_record" # Ensure ActiveRecord is available for Arel
+# frozen_string_literal: true
+
+require 'ostruct'
+require 'active_record' # Ensure ActiveRecord is available for Arel
 
 module BatchAgg
   class AggregateDefinition
@@ -23,7 +25,8 @@ module BatchAgg
     def method_missing(association_name, *args, &block_arg)
       # Ensure no arguments are passed for simple association access like `user.posts`
       if args.any? || block_arg
-        raise ArgumentError, "Unexpected arguments or block for association '#{association_name}' in aggregate definition."
+        raise ArgumentError,
+              "Unexpected arguments or block for association '#{association_name}' in aggregate definition."
       end
 
       reflection = @base_model_class.reflect_on_association(association_name)
@@ -34,20 +37,20 @@ module BatchAgg
 
       target_klass = reflection.klass
       correlation_predicate = if reflection.macro == :belongs_to
-        # For belongs_to :user on Post:
-        # target_klass is User.
-        # reflection.association_primary_key is User's primary key (e.g., "id").
-        # @outer_table_alias_node is the alias for the Post table.
-        # reflection.foreign_key is the foreign key on Post (e.g., "user_id").
-        target_klass.arel_table[reflection.association_primary_key].eq(@outer_table_alias_node[reflection.foreign_key])
-      else # :has_many, :has_one
-        # For has_many :posts on User:
-        # target_klass is Post.
-        # reflection.foreign_key is the foreign key on Post (e.g., "user_id").
-        # @outer_table_alias_node is the alias for the User table.
-        # reflection.active_record_primary_key is User's primary key (e.g., "id").
-        target_klass.arel_table[reflection.foreign_key].eq(@outer_table_alias_node[reflection.active_record_primary_key])
-      end
+                                # For belongs_to :user on Post:
+                                # target_klass is User.
+                                # reflection.association_primary_key is User's primary key (e.g., "id").
+                                # @outer_table_alias_node is the alias for the Post table.
+                                # reflection.foreign_key is the foreign key on Post (e.g., "user_id").
+                                target_klass.arel_table[reflection.association_primary_key].eq(@outer_table_alias_node[reflection.foreign_key])
+                              else # :has_many, :has_one
+                                # For has_many :posts on User:
+                                # target_klass is Post.
+                                # reflection.foreign_key is the foreign key on Post (e.g., "user_id").
+                                # @outer_table_alias_node is the alias for the User table.
+                                # reflection.active_record_primary_key is User's primary key (e.g., "id").
+                                target_klass.arel_table[reflection.foreign_key].eq(@outer_table_alias_node[reflection.active_record_primary_key])
+                              end
       target_klass.where(correlation_predicate)
     end
 
@@ -200,7 +203,7 @@ module BatchAgg
       scope = @base_model.where(@base_model.primary_key => record.id)
 
       # Use the from method to get results
-      return from(scope)
+      from(scope)
     end
 
     def from(scope)
@@ -208,12 +211,11 @@ module BatchAgg
       # Use the connection from the base model of the scope
       results_array = scope.klass.connection.select_all(query_arel.to_sql).to_a
 
-      results_hash = results_array.each_with_object({}) do |row_hash, memo|
+      results_array.each_with_object({}) do |row_hash, memo|
         # The primary key might be returned as a string from DB, ensure it matches type if needed for lookup
         record_id = row_hash[@base_model.primary_key.to_s]
         memo[record_id] = MultipleRecordsResultItem.new(row_hash, @aggregates)
       end
-      results_hash
     end
   end
 

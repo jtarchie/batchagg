@@ -1,5 +1,8 @@
-source "https://rubygems.org"
+# frozen_string_literal: true
 
-gem "with_model"
-gem "rspec"
-gem "sqlite3"
+source 'https://rubygems.org'
+
+gem 'rspec'
+gem 'rubocop', require: false
+gem 'sqlite3'
+gem 'with_model'

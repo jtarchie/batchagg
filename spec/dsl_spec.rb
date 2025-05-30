@@ -1,7 +1,9 @@
-require "active_record"
-ActiveRecord::Base.establish_connection(adapter: "sqlite3", database: ":memory:")
+# frozen_string_literal: true
 
-RSpec.describe "DSL" do
+require 'active_record'
+ActiveRecord::Base.establish_connection(adapter: 'sqlite3', database: ':memory:')
+
+RSpec.describe 'DSL' do
   with_model :User do
     table do |t|
       t.string :name
@@ -21,15 +23,15 @@ RSpec.describe "DSL" do
     end
   end
 
-  it "for a single user" do
-    user = User.create!(name: "Alice")
+  it 'for a single user' do
+    user = User.create!(name: 'Alice')
     10.times do |i|
       user.posts.create!(title: "Post #{i + 1}")
     end
 
     klass = aggregate do
-      count(:total_posts) { |user| user.posts }
-      count(:posts_with_title) { |user| user.posts.where(title: "Post 1") }
+      count(:total_posts, &:posts)
+      count(:posts_with_title) { |user| user.posts.where(title: 'Post 1') }
     end
 
     agg = klass.only(user)
@@ -37,16 +39,16 @@ RSpec.describe "DSL" do
     expect(agg[user.id].posts_with_title).to eq(1)
   end
 
-  it "handles multiple users" do
-    user1 = User.create!(name: "Alice")
-    user2 = User.create!(name: "Bob")
+  it 'handles multiple users' do
+    user1 = User.create!(name: 'Alice')
+    user2 = User.create!(name: 'Bob')
 
     5.times { |i| user1.posts.create!(title: "Post #{i + 1}") }
     3.times { |i| user2.posts.create!(title: "Post #{i + 1}") }
 
     klass = aggregate do
-      count(:total_posts) { |user| user.posts }
-      count(:posts_with_title) { |user| user.posts.where(title: "Post 1") }
+      count(:total_posts, &:posts)
+      count(:posts_with_title) { |user| user.posts.where(title: 'Post 1') }
     end
 
     results = klass.from(User.all)
