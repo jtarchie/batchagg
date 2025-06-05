@@ -308,4 +308,141 @@ RSpec.describe 'DSL' do
     expect(@agg[user.id].high_priority_views).to eq(450) # 100 + 200 + 150 (all categorized posts)
     expect(@agg[user.id].category_weighted_score).to eq(600) # (100*1) + (200*1) + (150*2)
   end
+
+  it 'handles count_expression aggregations' do
+    # Add columns for testing count expressions
+    Post.connection.add_column Post.table_name, :status, :string, default: 'draft'
+    Post.connection.add_column Post.table_name, :score, :integer, default: 0
+    Post.reset_column_information
+
+    user = User.create!(name: 'Alice')
+    user.posts.create!(title: 'Post 1', status: 'published', score: 5)
+    user.posts.create!(title: 'Post 2', status: 'draft', score: 3)
+    user.posts.create!(title: 'Post 3', status: 'published', score: 7)
+    user.posts.create!(title: 'Post 4', status: 'published', score: 2)
+
+    klass = aggregate(User) do
+      count_expression(:published_posts, "CASE WHEN status = 'published' THEN 1 END", &:posts)
+      count_expression(:high_score_posts, 'CASE WHEN score > 5 THEN 1 END', &:posts)
+      count_expression(:complex_condition, "CASE WHEN status = 'published' AND score >= 5 THEN 1 END", &:posts)
+    end
+
+    expect do
+      @agg = klass.only(user)
+    end.to_not exceed_query_limit(1)
+
+    expect(@agg[user.id].published_posts).to eq(3) # Posts 1, 3, 4 are published
+    expect(@agg[user.id].high_score_posts).to eq(1) # Only Post 3 has score > 5
+    expect(@agg[user.id].complex_condition).to eq(2) # Posts 1 and 3 meet both conditions
+  end
+
+  it 'handles count_distinct_expression aggregations' do
+    # Add columns for testing distinct count expressions
+    Post.connection.add_column Post.table_name, :author_name, :string
+    Post.connection.add_column Post.table_name, :topic, :string
+    Post.reset_column_information
+
+    user = User.create!(name: 'Alice')
+    user.posts.create!(title: 'Post 1', author_name: 'John', topic: 'Tech')
+    user.posts.create!(title: 'Post 2', author_name: 'Jane', topic: 'Tech')
+    user.posts.create!(title: 'Post 3', author_name: 'John', topic: 'Sports')
+    user.posts.create!(title: 'Post 4', author_name: 'Bob', topic: 'Tech')
+
+    klass = aggregate(User) do
+      count_distinct_expression(:unique_author_topic_pairs, "author_name || '-' || topic", &:posts)
+      count_distinct_expression(:unique_uppercased_authors, 'UPPER(author_name)', &:posts)
+      count_distinct_expression(:unique_topic_lengths, 'LENGTH(topic)', &:posts)
+    end
+
+    expect do
+      @agg = klass.only(user)
+    end.to_not exceed_query_limit(1)
+
+    # Unique pairs: 'John-Tech', 'Jane-Tech', 'John-Sports', 'Bob-Tech'
+    expect(@agg[user.id].unique_author_topic_pairs).to eq(4)
+    # Unique uppercased authors: 'JOHN', 'JANE', 'BOB'
+    expect(@agg[user.id].unique_uppercased_authors).to eq(3)
+    # Unique topic lengths: LENGTH('Tech') = 4, LENGTH('Sports') = 6
+    expect(@agg[user.id].unique_topic_lengths).to eq(2)
+  end
+
+  it 'handles string_agg_expression aggregations' do
+    # Add columns for testing string aggregation expressions
+    Post.connection.add_column Post.table_name, :priority, :integer, default: 1
+    Post.connection.add_column Post.table_name, :category_name, :string
+    Post.reset_column_information
+
+    user = User.create!(name: 'Alice')
+    user.posts.create!(title: 'Important Post', priority: 1, category_name: 'Tech')
+    user.posts.create!(title: 'Urgent Post', priority: 2, category_name: 'Business')
+    user.posts.create!(title: 'Normal Post', priority: 3, category_name: 'General')
+
+    klass = aggregate(User) do
+      string_agg_expression(:priority_titles, "priority || ': ' || title", delimiter: ' | ', &:posts)
+      string_agg_expression(:formatted_categories, 'UPPER(category_name)', delimiter: ', ', &:posts)
+      string_agg_expression(:title_lengths, "title || ' (' || LENGTH(title) || ' chars)'", delimiter: '; ', &:posts)
+    end
+
+    expect do
+      @agg = klass.only(user)
+    end.to_not exceed_query_limit(1)
+
+    # Check that the aggregated strings contain expected components
+    priority_titles = @agg[user.id].priority_titles.split(' | ').sort
+    expect(priority_titles).to match_array(['1: Important Post', '2: Urgent Post', '3: Normal Post'])
+
+    formatted_categories = @agg[user.id].formatted_categories.split(', ').sort
+    expect(formatted_categories).to match_array(%w[BUSINESS GENERAL TECH])
+
+    title_lengths = @agg[user.id].title_lengths.split('; ').sort
+    expected_lengths = [
+      'Important Post (14 chars)',
+      'Normal Post (11 chars)',
+      'Urgent Post (11 chars)'
+    ]
+    expect(title_lengths).to match_array(expected_lengths)
+  end
+
+  it 'handles mixed expression and column aggregations' do
+    # Test combining expression-based and column-based aggregations
+    Post.connection.add_column Post.table_name, :rating, :decimal, precision: 3, scale: 1, default: 0.0
+    Post.connection.add_column Post.table_name, :tags, :string
+    Post.reset_column_information
+
+    user = User.create!(name: 'Alice')
+    user.posts.create!(title: 'Post A', views: 100, rating: 4.5, tags: 'tech,ruby')
+    user.posts.create!(title: 'Post B', views: 200, rating: 3.8, tags: 'tech,javascript')
+    user.posts.create!(title: 'Post C', views: 150, rating: 4.2, tags: 'business')
+
+    klass = aggregate(User) do
+      # Column-based aggregations
+      count(:total_posts, &:posts)
+      sum(:total_views, :views, &:posts)
+      avg(:avg_rating, :rating, &:posts)
+
+      # Expression-based aggregations
+      count_expression(:high_rated_posts, 'CASE WHEN rating >= 4.0 THEN 1 END', &:posts)
+      count_distinct_expression(:unique_tag_counts, "LENGTH(tags) - LENGTH(REPLACE(tags, ',', '')) + 1", &:posts)
+      sum_expression(:view_rating_product, 'views * rating', &:posts)
+      string_agg_expression(:title_rating_summary, "title || ' (' || rating || '★)'", delimiter: ' | ', &:posts)
+    end
+
+    expect do
+      @agg = klass.only(user)
+    end.to_not exceed_query_limit(1)
+
+    expect(@agg[user.id].total_posts).to eq(3)
+    expect(@agg[user.id].total_views).to eq(450)
+    expect(@agg[user.id].avg_rating.to_f).to be_within(0.01).of(4.17)
+
+    expect(@agg[user.id].high_rated_posts).to eq(2) # Posts A and C have rating >= 4.0
+    expect(@agg[user.id].unique_tag_counts).to eq(2) # 2 tags and 1 tag (unique counts)
+
+    # views * rating: (100 * 4.5) + (200 * 3.8) + (150 * 4.2) = 450 + 760 + 630 = 1840
+    expect(@agg[user.id].view_rating_product.to_f).to be_within(0.01).of(1840.0)
+
+    summary_parts = @agg[user.id].title_rating_summary.split(' | ').sort
+    expected_parts = ['Post A (4.5★)', 'Post B (3.8★)', 'Post C (4.2★)']
+    expect(summary_parts).to match_array(expected_parts)
+  end
 end

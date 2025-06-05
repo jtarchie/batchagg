@@ -143,8 +143,12 @@ module BatchAgg
       case aggregate_def.type
       when :count
         base_query.select(Arel.star.count).to_sql
+      when :count_expression
+        base_query.select(Arel.sql("COUNT(#{aggregate_def.expression})")).to_sql
       when :count_distinct
         base_query.select(subject_table[aggregate_def.column].count(true)).to_sql # true for DISTINCT
+      when :count_distinct_expression
+        base_query.select(Arel.sql("COUNT(DISTINCT #{aggregate_def.expression})")).to_sql
       when :sum
         base_query.select(subject_table[aggregate_def.column].sum).to_sql
       when :sum_expression
@@ -168,6 +172,13 @@ module BatchAgg
         # Arel doesn't have a direct helper for GROUP_CONCAT's optional second arg in a cross-db way.
         # We build it using Arel::Nodes::NamedFunction.
         args = [subject_table[aggregate_def.column]]
+        args << Arel::Nodes.build_quoted(delimiter) if delimiter
+
+        base_query.select(Arel::Nodes::NamedFunction.new('GROUP_CONCAT', args)).to_sql
+      when :string_agg_expression
+        delimiter = aggregate_def.options&.dig(:delimiter)
+
+        args = [Arel.sql(aggregate_def.expression)]
         args << Arel::Nodes.build_quoted(delimiter) if delimiter
 
         base_query.select(Arel::Nodes::NamedFunction.new('GROUP_CONCAT', args)).to_sql
@@ -258,6 +269,14 @@ module BatchAgg
       add_aggregate(:count_distinct, name, block, column: column)
     end
 
+    def count_expression(name, expression, &block)
+      add_aggregate(:count_expression, name, block, expression: expression)
+    end
+
+    def count_distinct_expression(name, expression, &block)
+      add_aggregate(:count_distinct_expression, name, block, expression: expression)
+    end
+
     def sum(name, column, &block)
       add_aggregate(:sum, name, block, column: column)
     end
@@ -292,6 +311,10 @@ module BatchAgg
 
     def string_agg(name, column, delimiter: nil, &block)
       add_aggregate(:string_agg, name, block, column: column, options: { delimiter: delimiter })
+    end
+
+    def string_agg_expression(name, expression, delimiter: nil, &block)
+      add_aggregate(:string_agg_expression, name, block, expression: expression, options: { delimiter: delimiter })
     end
 
     def build_class
