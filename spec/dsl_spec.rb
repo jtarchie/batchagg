@@ -27,6 +27,16 @@ RSpec.describe 'DSL' do
     end
   end
 
+  with_model :Category do
+    table do |t|
+      t.string :name
+      t.integer :priority, default: 0
+    end
+    model do
+      has_many :posts
+    end
+  end
+
   it 'for a single user' do
     user = User.create!(name: 'Alice')
     10.times do |i|
@@ -244,5 +254,58 @@ RSpec.describe 'DSL' do
     expect(@agg[user.id].total_engagement).to eq(495) # (100+10) + (200+20) + (150+15)
     expect(@agg[user.id].weighted_score).to eq(1125) # (100*2+10*5) + (200*2+20*5) + (150*2+15*5)
     expect(@agg[user.id].age).to eq(30)
+  end
+
+  it 'handles complex joins and includes in aggregations' do
+    # Add category_id to posts
+    Post.connection.add_column Post.table_name, :category_id, :integer
+    Post.connection.add_column Post.table_name, :published, :boolean, default: true
+    Post.reset_column_information
+    Post.class_eval { belongs_to :category, optional: true }
+
+    # Create test data
+    tech_category = Category.create!(name: 'Technology', priority: 1)
+    sports_category = Category.create!(name: 'Sports', priority: 2)
+
+    user = User.create!(name: 'Alice', age: 30)
+
+    # Create posts with categories
+    user.posts.create!(title: 'Tech Post 1', views: 100, category: tech_category, published: true)
+    user.posts.create!(title: 'Tech Post 2', views: 200, category: tech_category, published: false)
+    user.posts.create!(title: 'Sports Post 1', views: 150, category: sports_category, published: true)
+    user.posts.create!(title: 'Uncategorized Post', views: 50, published: true) # No category
+
+    klass = aggregate(User) do
+      column(:age)
+
+      # Count posts by joining with categories
+      count(:published_tech_posts) do |user_scope|
+        user_scope.posts
+                  .joins(:category)
+                  .where(Category.table_name => { name: 'Technology' }, published: true)
+      end
+
+      # Sum views for high-priority categories using includes
+      sum(:high_priority_views, :views) do |user_scope|
+        user_scope.posts
+                  .joins(:category)
+                  .where(Category.table_name => { priority: [1, 2] })
+      end
+
+      # Complex expression with joined data
+      sum_expression(:category_weighted_score,
+                     "#{Post.table_name}.views * #{Category.table_name}.priority") do |user_scope|
+        user_scope.posts.joins(:category)
+      end
+    end
+
+    expect do
+      @agg = klass.only(user)
+    end.to_not exceed_query_limit(1)
+
+    expect(@agg[user.id].age).to eq(30)
+    expect(@agg[user.id].published_tech_posts).to eq(1) # Only Tech Post 1 is published
+    expect(@agg[user.id].high_priority_views).to eq(450) # 100 + 200 + 150 (all categorized posts)
+    expect(@agg[user.id].category_weighted_score).to eq(600) # (100*1) + (200*1) + (150*2)
   end
 end
