@@ -73,9 +73,14 @@ module BatchAgg
       projections = [outer_table_alias[@base_model.primary_key].as(@base_model.primary_key.to_s)]
 
       aggregates.each do |aggregate_def|
-        correlated_relation = aggregate_def.block.call(correlation_builder)
-        subquery_sql = build_subquery_for_aggregate(correlated_relation, aggregate_def)
-        projections << Arel.sql("(#{subquery_sql})").as(aggregate_def.name.to_s)
+        if aggregate_def.type == :column
+          # For column access, directly project from the outer table alias
+          projections << outer_table_alias[aggregate_def.column].as(aggregate_def.name.to_s)
+        else
+          correlated_relation = aggregate_def.block.call(correlation_builder)
+          subquery_sql = build_subquery_for_aggregate(correlated_relation, aggregate_def)
+          projections << Arel.sql("(#{subquery_sql})").as(aggregate_def.name.to_s)
+        end
       end
 
       arel_query = Arel::SelectManager.new(scope.klass.connection) # Use connection from scope's class
@@ -240,6 +245,10 @@ module BatchAgg
     end
 
     public
+
+    def column(name)
+      add_aggregate(:column, name, nil, column: name)
+    end
 
     def count(name, &block)
       add_aggregate(:count, name, block)

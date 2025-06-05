@@ -6,6 +6,7 @@ ActiveRecord::Base.establish_connection(adapter: 'sqlite3', database: ':memory:'
 RSpec.describe 'DSL' do
   with_model :User do
     table do |t|
+      t.integer :age
       t.string :name
     end
 
@@ -13,6 +14,7 @@ RSpec.describe 'DSL' do
       has_many :posts
     end
   end
+
   with_model :Post do
     table do |t|
       t.string :title
@@ -208,5 +210,26 @@ RSpec.describe 'DSL' do
     Post.connection.remove_column Post.table_name, :score
     Post.connection.remove_column Post.table_name, :bonus
     Post.reset_column_information
+  end
+
+  it 'handles with column on model' do
+    Post.connection.add_column Post.table_name, :likes, :integer, default: 0
+    Post.reset_column_information
+
+    user = User.create!(name: 'Alice', age: 30)
+    user.posts.create!(title: 'Post 1', views: 100, likes: 10)
+    user.posts.create!(title: 'Post 2', views: 200, likes: 20)
+    user.posts.create!(title: 'Post 3', views: 150, likes: 15)
+
+    klass = aggregate(User) do # Pass User model
+      column(:age)
+      sum_expression(:total_engagement, 'views + likes', &:posts)
+      sum_expression(:weighted_score, 'views * 2 + likes * 5', &:posts)
+    end
+
+    agg = klass.only(user)
+    expect(agg[user.id].total_engagement).to eq(495) # (100+10) + (200+20) + (150+15)
+    expect(agg[user.id].weighted_score).to eq(1125) # (100*2+10*5) + (200*2+20*5) + (150*2+15*5)
+    expect(agg[user.id].age).to eq(30)
   end
 end
