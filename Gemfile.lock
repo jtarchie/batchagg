@@ -55,6 +55,9 @@ GEM
     rspec-mocks (3.13.5)
       diff-lcs (>= 1.2.0, < 2.0)
       rspec-support (~> 3.13.0)
+    rspec-sqlimit (1.0.0)
+      activerecord (>= 4.2.0)
+      rspec (~> 3.0)
     rspec-support (3.13.4)
     rubocop (1.75.8)
       json (~> 2.3)
@@ -88,6 +91,7 @@ PLATFORMS
 
 DEPENDENCIES
   rspec
+  rspec-sqlimit
   rubocop
   sqlite3
   with_model

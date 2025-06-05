@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'active_record'
+require 'rspec-sqlimit'
 ActiveRecord::Base.establish_connection(adapter: 'sqlite3', database: ':memory:')
 
 RSpec.describe 'DSL' do
@@ -37,9 +38,12 @@ RSpec.describe 'DSL' do
       count(:posts_with_title) { |user_scope| user_scope.posts.where(title: 'Post 1') } # Renamed block arg
     end
 
-    agg = klass.only(user)
-    expect(agg[user.id].total_posts).to eq(10)
-    expect(agg[user.id].posts_with_title).to eq(1)
+    expect do
+      @agg = klass.only(user)
+    end.to_not exceed_query_limit(1)
+
+    expect(@agg[user.id].total_posts).to eq(10)
+    expect(@agg[user.id].posts_with_title).to eq(1)
   end
 
   it 'handles multiple users' do
@@ -54,12 +58,15 @@ RSpec.describe 'DSL' do
       count(:posts_with_title) { |user_scope| user_scope.posts.where(title: 'Post 1') } # Renamed block arg
     end
 
-    results = klass.from(User.all)
-    expect(results[user1.id].total_posts).to eq(5)
-    expect(results[user1.id].posts_with_title).to eq(1)
+    expect do
+      @results = klass.from(User.all)
+    end.to_not exceed_query_limit(1)
 
-    expect(results[user2.id].total_posts).to eq(3)
-    expect(results[user2.id].posts_with_title).to eq(1)
+    expect(@results[user1.id].total_posts).to eq(5)
+    expect(@results[user1.id].posts_with_title).to eq(1)
+
+    expect(@results[user2.id].total_posts).to eq(3)
+    expect(@results[user2.id].posts_with_title).to eq(1)
   end
 
   it 'handles different aggregate functions' do
@@ -78,14 +85,17 @@ RSpec.describe 'DSL' do
       max(:max_views, :views, &:posts)
     end
 
-    agg = klass.only(user)
-    expect(agg[user.id].total_posts).to eq(3)
-    expect(agg[user.id].total_views).to eq(600)
+    expect do
+      @agg = klass.only(user)
+    end.to_not exceed_query_limit(1)
+
+    expect(@agg[user.id].total_posts).to eq(3)
+    expect(@agg[user.id].total_views).to eq(600)
     # Averages can be BigDecimal; convert to float for comparison if needed, or compare BigDecimal directly.
     # SQLite AVG returns float by default.
-    expect(agg[user.id].avg_views.to_f).to eq(200.0)
-    expect(agg[user.id].min_views).to eq(100)
-    expect(agg[user.id].max_views).to eq(300)
+    expect(@agg[user.id].avg_views.to_f).to eq(200.0)
+    expect(@agg[user.id].min_views).to eq(100)
+    expect(@agg[user.id].max_views).to eq(300)
   end
 
   it 'handles overlapping column names between models' do
@@ -101,8 +111,11 @@ RSpec.describe 'DSL' do
       sum(:total_post_views, :views, &:posts) # Should use posts.views, not users.views
     end
 
-    agg = klass.only(user)
-    expect(agg[user.id].total_post_views).to eq(300) # Sum of post views, not user views
+    expect do
+      @agg = klass.only(user)
+    end.to_not exceed_query_limit(1)
+
+    expect(@agg[user.id].total_post_views).to eq(300) # Sum of post views, not user views
   end
 
   it 'handles complex aggregations with expressions' do
@@ -120,9 +133,12 @@ RSpec.describe 'DSL' do
       sum_expression(:weighted_score, 'views * 2 + likes * 5', &:posts)
     end
 
-    agg = klass.only(user)
-    expect(agg[user.id].total_engagement).to eq(495) # (100+10) + (200+20) + (150+15)
-    expect(agg[user.id].weighted_score).to eq(1125) # (100*2+10*5) + (200*2+20*5) + (150*2+15*5)
+    expect do
+      @agg = klass.only(user)
+    end.to_not exceed_query_limit(1)
+
+    expect(@agg[user.id].total_engagement).to eq(495) # (100+10) + (200+20) + (150+15)
+    expect(@agg[user.id].weighted_score).to eq(1125) # (100*2+10*5) + (200*2+20*5) + (150*2+15*5)
   end
 
   it 'handles distinct count aggregation' do
@@ -143,14 +159,12 @@ RSpec.describe 'DSL' do
       count_distinct(:distinct_view_counts, :views, &:posts)
     end
 
-    agg = klass.only(user)
-    expect(agg[user.id].unique_categories).to eq(2) # Categories 1 and 2
-    expect(agg[user.id].distinct_view_counts).to eq(2) # View counts 100 and 200
+    expect do
+      @agg = klass.only(user)
+    end.to_not exceed_query_limit(1)
 
-    # Teardown: Remove category_id if it interferes with other tests
-    # Or ensure it's scoped within this test or a context block
-    Post.connection.remove_column Post.table_name, :category_id
-    Post.reset_column_information
+    expect(@agg[user.id].unique_categories).to eq(2) # Categories 1 and 2
+    expect(@agg[user.id].distinct_view_counts).to eq(2) # View counts 100 and 200
   end
 
   it 'handles string aggregation' do
@@ -163,12 +177,11 @@ RSpec.describe 'DSL' do
       string_agg(:all_post_titles, :title, delimiter: '; ', &:posts)
     end
 
-    agg = klass.only(user)
-    # Order might not be guaranteed by default with GROUP_CONCAT unless an ORDER BY is in the subquery
-    # For testing, we might need to sort the expected string or ensure the test data inserts in a fixed order
-    # and the DB respects that for GROUP_CONCAT without explicit ordering.
-    # For simplicity here, let's assume a consistent order or match as a set.
-    titles = agg[user.id].all_post_titles.split('; ').sort
+    expect do
+      @agg = klass.only(user)
+    end.to_not exceed_query_limit(1)
+
+    titles = @agg[user.id].all_post_titles.split('; ').sort
     expect(titles).to match_array(['First Post', 'Second Post', 'Third Post'])
   end
 
@@ -192,24 +205,21 @@ RSpec.describe 'DSL' do
       max_expression(:max_bonus_doubled, 'bonus * 2', &:posts)
     end
 
-    agg = klass.only(user)
+    expect do
+      @agg = klass.only(user)
+    end.to_not exceed_query_limit(1)
 
     # (11 + 22 + 33) / 3 = 66 / 3 = 22
-    expect(agg[user.id].avg_total_score.to_f).to eq(22.0)
-    expect(agg[user.id].min_total_score).to eq(11) # min(11, 22, 33)
-    expect(agg[user.id].max_total_score).to eq(33) # max(11, 22, 33)
+    expect(@agg[user.id].avg_total_score.to_f).to eq(22.0)
+    expect(@agg[user.id].min_total_score).to eq(11) # min(11, 22, 33)
+    expect(@agg[user.id].max_total_score).to eq(33) # max(11, 22, 33)
 
     # (10*2 + 20*2 + 30*2) / 3 = (20 + 40 + 60) / 3 = 120 / 3 = 40
-    expect(agg[user.id].avg_score_times_two.to_f).to eq(40.0)
+    expect(@agg[user.id].avg_score_times_two.to_f).to eq(40.0)
     # min(10+5, 20+5, 30+5) = min(15, 25, 35)
-    expect(agg[user.id].min_score_plus_five).to eq(15)
+    expect(@agg[user.id].min_score_plus_five).to eq(15)
     # max(1*2, 2*2, 3*2) = max(2, 4, 6)
-    expect(agg[user.id].max_bonus_doubled).to eq(6)
-
-    # Teardown
-    Post.connection.remove_column Post.table_name, :score
-    Post.connection.remove_column Post.table_name, :bonus
-    Post.reset_column_information
+    expect(@agg[user.id].max_bonus_doubled).to eq(6)
   end
 
   it 'handles with column on model' do
@@ -227,9 +237,12 @@ RSpec.describe 'DSL' do
       sum_expression(:weighted_score, 'views * 2 + likes * 5', &:posts)
     end
 
-    agg = klass.only(user)
-    expect(agg[user.id].total_engagement).to eq(495) # (100+10) + (200+20) + (150+15)
-    expect(agg[user.id].weighted_score).to eq(1125) # (100*2+10*5) + (200*2+20*5) + (150*2+15*5)
-    expect(agg[user.id].age).to eq(30)
+    expect do
+      @agg = klass.only(user)
+    end.to_not exceed_query_limit(1)
+
+    expect(@agg[user.id].total_engagement).to eq(495) # (100+10) + (200+20) + (150+15)
+    expect(@agg[user.id].weighted_score).to eq(1125) # (100*2+10*5) + (200*2+20*5) + (150*2+15*5)
+    expect(@agg[user.id].age).to eq(30)
   end
 end
