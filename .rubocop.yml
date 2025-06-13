@@ -28,6 +28,9 @@ Metrics/CyclomaticComplexity:
 Metrics/ClassLength:
   Enabled: false
 
+Metrics/BlockNesting:
+  Enabled: false
+
 Layout/LineLength:
   Enabled: false
 

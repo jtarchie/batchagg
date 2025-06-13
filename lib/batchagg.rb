@@ -96,17 +96,43 @@ module BatchAgg
       aggregates.each do |aggregate_def|
         if aggregate_def.type == :column
           if aggregate_def.block.nil?
-            # Handles direct column access like `column(:age)`
-            # In this case, aggregate_def.column stores the source column name (which is the same as aggregate_def.name)
+            # Case 1: Direct attribute from base model (e.g., column(:age))
             projections << outer_table_alias[aggregate_def.column].as(aggregate_def.name.to_s)
           else
-            # Handles aliased column access like `column(:aliased_aged, &:age)`
-            # The block is called with an accessor for the outer table.
-            source_arel_attribute = aggregate_def.block.call(outer_table_accessor)
-            raise ArgumentError, "Block for column aggregate '#{aggregate_def.name}' must return an Arel attribute or SQL literal." unless source_arel_attribute.is_a?(Arel::Attributes::Attribute) || source_arel_attribute.is_a?(Arel::Nodes::SqlLiteral)
+            # Block is present. This could be:
+            # Case 2: Aliased attribute from base model (e.g., column(:aliased_aged, &:age))
+            # Case 3: Subquery (e.g., column(:first_post_views) { |s| s.posts.limit(1).select(:views) })
 
-            projections << source_arel_attribute.as(aggregate_def.name.to_s)
+            is_aliased_attribute_case = false
+            begin
+              # Attempt to treat as Case 2: Aliased attribute
+              value = aggregate_def.block.call(outer_table_accessor)
+              if value.is_a?(Arel::Attributes::Attribute) || value.is_a?(Arel::Nodes::SqlLiteral)
+                projections << value.as(aggregate_def.name.to_s)
+                is_aliased_attribute_case = true
+              end
+              # If `value` is something else (e.g., an ActiveRecord::Relation by mistake, or a non-Arel literal),
+              # it's not a valid aliased attribute projection, so is_aliased_attribute_case remains false.
+            rescue NoMethodError, ArgumentError
+              # If calling with outer_table_accessor fails (e.g., block tried `scope.posts`,
+              # or arity mismatch), it's likely Case 3 (subquery).
+              # is_aliased_attribute_case remains false.
+            end
 
+            unless is_aliased_attribute_case
+              # Fallback to Case 3: Treat as a subquery
+              begin
+                correlated_relation = aggregate_def.block.call(correlation_builder)
+                raise ArgumentError, "Block for column subquery '#{aggregate_def.name}' must return an ActiveRecord::Relation. Got: #{correlated_relation.class}" unless correlated_relation.is_a?(ActiveRecord::Relation)
+
+                # The user is responsible for ensuring this relation results in a scalar subquery
+                # (e.g., by using .select() and .limit(1)).
+                subquery_sql = correlated_relation.to_sql
+                projections << Arel.sql("(#{subquery_sql})").as(aggregate_def.name.to_s)
+              rescue StandardError => e
+                raise ArgumentError, "Block for column aggregate '#{aggregate_def.name}' is ambiguous or malformed. It did not resolve as an aliased attribute and failed as a subquery. Original error: #{e.message}"
+              end
+            end
           end
         else
           # Handles other aggregate types (sum, count, etc.)

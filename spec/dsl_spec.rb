@@ -246,6 +246,7 @@ RSpec.describe "DSL" do
     klass = aggregate(User) do # Pass User model
       column(:age)
       column(:aliased_aged, &:age)
+      column(:views) { |user_scope| user_scope.posts.limit(1).select(:views) }
       sum_expression(:total_engagement, "views + likes", &:posts)
       sum_expression(:weighted_score, "views * 2 + likes * 5", &:posts)
     end
@@ -258,6 +259,7 @@ RSpec.describe "DSL" do
     expect(@agg[user.id].weighted_score).to eq(1125) # (100*2+10*5) + (200*2+20*5) + (150*2+15*5)
     expect(@agg[user.id].age).to eq(30)
     expect(@agg[user.id].aliased_aged).to eq(30) # Add this line to verify the aliased column
+    expect(@agg[user.id].views).to eq(100) # Add this line to verify the aliased column
   end
 
   it "handles complex joins and includes in aggregations" do
