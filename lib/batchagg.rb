@@ -234,15 +234,6 @@ module BatchAgg
 
   # Builds SQL for aggregate functions (count, sum, etc.)
   class AggregateSubqueryBuilder
-    AGGREGATE_FUNCTIONS = {
-      count: ->(relation) { relation.select(Arel.star.count) },
-      count_distinct: ->(relation, column) { relation.select(relation.model.arel_table[column].count(true)) },
-      sum: ->(relation, column) { relation.select(relation.model.arel_table[column].sum) },
-      avg: ->(relation, column) { relation.select(relation.model.arel_table[column].average) },
-      min: ->(relation, column) { relation.select(relation.model.arel_table[column].minimum) },
-      max: ->(relation, column) { relation.select(relation.model.arel_table[column].maximum) }
-    }.freeze
-
     def build_subquery_sql(relation, aggregate_def)
       base_query = relation.except(:select)
 
