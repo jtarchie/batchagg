@@ -15,6 +15,7 @@ RSpec.describe "DSL" do
 
     model do
       has_many :posts
+      has_one :profile
     end
   end
 
@@ -36,6 +37,19 @@ RSpec.describe "DSL" do
     end
     model do
       has_many :posts
+    end
+  end
+
+  with_model :Profile do
+    table do |t|
+      t.string :bio
+      t.boolean :verified, default: false
+      t.integer :views, default: 0
+      t.belongs_to :user
+    end
+
+    model do
+      belongs_to :user
     end
   end
 
@@ -450,5 +464,89 @@ RSpec.describe "DSL" do
     summary_parts = @agg[user.id].title_rating_summary.split(" | ").sort
     expected_parts = ["Post A (4.5★)", "Post B (3.8★)", "Post C (4.2★)"]
     expect(summary_parts).to match_array(expected_parts)
+  end
+
+  it "handles has_one associations" do
+    user1 = User.create!(name: "Alice")
+    user2 = User.create!(name: "Bob")
+
+    # Create profiles with different data
+    user1.create_profile!(bio: "Ruby developer", verified: true, views: 150)
+    user2.create_profile!(bio: "Python enthusiast", verified: false, views: 75)
+
+    klass = aggregate(User) do
+      column(:name)
+      column(:has_bio) { |user_scope| user_scope.profile.select("bio IS NOT NULL AS has_bio") }
+      column(:bio) { |user_scope| user_scope.profile.select(:bio) }
+      column(:verified) { |user_scope| user_scope.profile.select(:verified) }
+      sum(:profile_views, :views, &:profile)
+    end
+
+    expect do
+      @results = klass.from(User.all)
+    end.to_not exceed_query_limit(1)
+
+    expect(@results[user1.id].name).to eq("Alice")
+    expect(@results[user1.id].bio).to eq("Ruby developer")
+    expect(@results[user1.id].verified).to eq(1)
+    expect(@results[user1.id].profile_views).to eq(150)
+
+    expect(@results[user2.id].name).to eq("Bob")
+    expect(@results[user2.id].bio).to eq("Python enthusiast")
+    expect(@results[user2.id].verified).to eq(0)
+    expect(@results[user2.id].profile_views).to eq(75)
+  end
+
+  it "handles complex aggregations with has_one associations" do
+    user = User.create!(name: "Charlie", age: 35)
+    user.create_profile!(bio: "Full-stack developer", verified: true, views: 200)
+
+    # Create some posts for the user
+    user.posts.create!(title: "Post 1", views: 100)
+    user.posts.create!(title: "Post 2", views: 50)
+
+    klass = aggregate(User) do
+      column(:age)
+      column(:bio) { |user_scope| user_scope.profile.select(:bio) }
+      sum(:total_views, :views, &:posts)
+      sum(:profile_views, :views, &:profile)
+    end
+
+    expect do
+      @agg = klass.only(user)
+    end.to_not exceed_query_limit(1)
+
+    expect(@agg[user.id].age).to eq(35)
+    expect(@agg[user.id].bio).to eq("Full-stack developer")
+    expect(@agg[user.id].total_views).to eq(150) # Sum of post views
+    expect(@agg[user.id].profile_views).to eq(200) # Profile views
+  end
+
+  it "handles users with and without has_one associations" do
+    user_with_profile = User.create!(name: "Diana")
+    user_without_profile = User.create!(name: "Eric")
+
+    user_with_profile.create_profile!(bio: "Architect", verified: true, views: 120)
+
+    klass = aggregate(User) do
+      column(:name)
+      count(:has_profile, &:profile)
+      column(:verified) { |user_scope| user_scope.profile.select(:verified) }
+      sum(:profile_views, :views, &:profile)
+    end
+
+    expect do
+      @results = klass.from(User.all)
+    end.to_not exceed_query_limit(1)
+
+    expect(@results[user_with_profile.id].name).to eq("Diana")
+    expect(@results[user_with_profile.id].has_profile).to eq(1)
+    expect(@results[user_with_profile.id].verified).to eq(1)
+    expect(@results[user_with_profile.id].profile_views).to eq(120)
+
+    expect(@results[user_without_profile.id].name).to eq("Eric")
+    expect(@results[user_without_profile.id].has_profile).to eq(0)
+    expect(@results[user_without_profile.id].verified).to be_nil
+    expect(@results[user_without_profile.id].profile_views).to be_nil
   end
 end

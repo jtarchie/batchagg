@@ -21,7 +21,7 @@ module BatchAgg
       type == :column
     end
 
-    def has_block?
+    def block?
       !block.nil?
     end
   end
@@ -41,7 +41,7 @@ module BatchAgg
       target_class.where(correlation_condition)
     end
 
-    def has_association?(association_name)
+    def association?(association_name)
       @base_model_class.reflect_on_association(association_name).present?
     end
 
@@ -95,7 +95,7 @@ module BatchAgg
     end
 
     def respond_to_missing?(method_name, include_private = false)
-      @association_resolver.has_association?(method_name) || super
+      @association_resolver.association?(method_name) || super
     end
 
     private
@@ -122,16 +122,16 @@ module BatchAgg
     end
 
     def respond_to_missing?(method_name, include_private = false)
-      has_column?(method_name) || super
+      column?(method_name) || super
     end
 
     private
 
     def valid_attribute_access?(method_name, args, block_arg)
-      args.empty? && block_arg.nil? && has_column?(method_name)
+      args.empty? && block_arg.nil? && column?(method_name)
     end
 
-    def has_column?(method_name)
+    def column?(method_name)
       @base_model_class.columns_hash.key?(method_name.to_s)
     end
   end
@@ -144,7 +144,7 @@ module BatchAgg
     end
 
     def build_projection(aggregate_def, correlation_builder)
-      if aggregate_def.has_block?
+      if aggregate_def.block?
         build_block_based_projection(aggregate_def, correlation_builder)
       else
         build_direct_attribute_projection(aggregate_def)
@@ -345,7 +345,7 @@ module BatchAgg
       scope.where_values_hash.each do |column_name, value|
         column_name_str = column_name.to_s
 
-        if model_has_column?(column_name_str)
+        if model_column?(column_name_str)
           arel_query.where(@outer_table_alias[column_name.to_sym].eq(value))
           processed_columns << column_name_str
         end
@@ -404,7 +404,7 @@ module BatchAgg
       end
     end
 
-    def model_has_column?(column_name)
+    def model_column?(column_name)
       @base_model.columns_hash.key?(column_name)
     end
   end
@@ -644,9 +644,7 @@ module BatchAgg
       add_aggregate(:string_agg_expression, name, block, expression: expression, options: { delimiter: delimiter })
     end
 
-    def get_aggregates
-      @aggregates
-    end
+    attr_reader :aggregates
 
     private
 
@@ -664,7 +662,7 @@ module BatchAgg
     def build_class(&block)
       collector = AggregateDefinitionCollector.new
       collector.instance_eval(&block)
-      aggregates = collector.get_aggregates
+      aggregates = collector.aggregates
 
       AggregateResultClass.new(aggregates, @base_model)
     end
