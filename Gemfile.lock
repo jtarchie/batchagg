@@ -101,6 +101,7 @@ GEM
     ruby-progressbar (1.13.0)
     securerandom (0.4.1)
     sqlite3 (2.6.0-arm64-darwin)
+    sqlite3 (2.6.0-x86_64-linux-gnu)
     stringio (3.1.7)
     timeout (0.4.3)
     tzinfo (2.0.6)
@@ -114,6 +115,7 @@ GEM
 
 PLATFORMS
   arm64-darwin-24
+  x86_64-linux
 
 DEPENDENCIES
   batchagg!
