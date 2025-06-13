@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
-require 'ostruct'
-require 'active_record' # Ensure ActiveRecord is available for Arel
+require "ostruct"
+require "active_record" # Ensure ActiveRecord is available for Arel
 
 module BatchAgg
   class AggregateDefinition
@@ -174,14 +174,14 @@ module BatchAgg
         args = [subject_table[aggregate_def.column]]
         args << Arel::Nodes.build_quoted(delimiter) if delimiter
 
-        base_query.select(Arel::Nodes::NamedFunction.new('GROUP_CONCAT', args)).to_sql
+        base_query.select(Arel::Nodes::NamedFunction.new("GROUP_CONCAT", args)).to_sql
       when :string_agg_expression
         delimiter = aggregate_def.options&.dig(:delimiter)
 
         args = [Arel.sql(aggregate_def.expression)]
         args << Arel::Nodes.build_quoted(delimiter) if delimiter
 
-        base_query.select(Arel::Nodes::NamedFunction.new('GROUP_CONCAT', args)).to_sql
+        base_query.select(Arel::Nodes::NamedFunction.new("GROUP_CONCAT", args)).to_sql
       else
         raise ArgumentError, "Unsupported aggregate type: #{aggregate_def.type}"
       end

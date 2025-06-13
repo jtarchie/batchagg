@@ -15,8 +15,8 @@
 # it.
 #
 # See https://rubydoc.info/gems/rspec-core/RSpec/Core/Configuration
-require 'with_model'
-require_relative '../lib/batchagg'
+require "with_model"
+require_relative "../lib/batchagg"
 RSpec.configure do |config|
   config.extend WithModel
   # rspec-expectations config goes here. You can use an alternate

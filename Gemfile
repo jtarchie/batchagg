@@ -1,9 +1,11 @@
 # frozen_string_literal: true
 
-source 'https://rubygems.org'
+source "https://rubygems.org"
 
-gem 'rspec'
-gem 'rspec-sqlimit'
-gem 'rubocop', require: false
-gem 'sqlite3'
-gem 'with_model'
+# Specify your gem's dependencies in batchagg.gemspec
+gemspec
+
+gem "irb"
+gem "rake", "~> 13.0"
+
+gem "rubocop", "~> 1.21"
