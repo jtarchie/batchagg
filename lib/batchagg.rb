@@ -321,10 +321,12 @@ module BatchAgg
       AggregateResultClass.new(@aggregates, @base_model)
     end
   end
-end
 
-def aggregate(base_model, &block)
-  builder = BatchAgg::AggregateBuilder.new(base_model)
-  builder.instance_eval(&block)
-  builder.build_class
+  module DSL
+    def aggregate(base_model, &block)
+      builder = BatchAgg::AggregateBuilder.new(base_model)
+      builder.instance_eval(&block)
+      builder.build_class
+    end
+  end
 end

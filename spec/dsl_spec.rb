@@ -5,6 +5,8 @@ require "rspec-sqlimit"
 ActiveRecord::Base.establish_connection(adapter: "sqlite3", database: ":memory:")
 
 RSpec.describe "DSL" do
+  include BatchAgg::DSL
+
   with_model :User do
     table do |t|
       t.integer :age
