@@ -547,7 +547,7 @@ RSpec.describe "DSL" do
     expect(@results[user_without_profile.id].name).to eq("Eric")
     expect(@results[user_without_profile.id].has_profile).to eq(0)
     expect(@results[user_without_profile.id].verified).to be_nil
-    expect(@results[user_without_profile.id].profile_views).to be_nil
+    expect(@results[user_without_profile.id].profile_views).to eq(0)
   end
 
   with_model :Physician do
@@ -618,5 +618,39 @@ RSpec.describe "DSL" do
       @agg_single = klass.only(physician1)
     end.to_not exceed_query_limit(1)
     expect(@agg_single[physician1.id].total_patients).to eq(2)
+  end
+
+  it "handles aggregations returning NULL by defaulting to 0 or 0.0" do
+    user_no_posts = User.create!(name: "UserWithoutPosts")
+
+    # Post model has 'views' column by default in these tests.
+    # We'll use 'views' for both column and expression-based aggregations.
+    klass = aggregate(User) do
+      sum(:sum_of_views, :views, &:posts)
+      avg(:avg_of_views, :views, &:posts)
+      min(:min_of_views, :views, &:posts)
+      max(:max_of_views, :views, &:posts)
+
+      sum_expression(:sum_expr_views, "views * 2", &:posts)
+      avg_expression(:avg_expr_views, "views * 2", &:posts)
+      min_expression(:min_expr_views, "views * 2", &:posts)
+      max_expression(:max_expr_views, "views * 2", &:posts)
+    end
+
+    expect do
+      @agg = klass.only(user_no_posts)
+    end.to_not exceed_query_limit(1)
+
+    result = @agg[user_no_posts.id]
+
+    expect(result.sum_of_views).to eq(0)
+    expect(result.avg_of_views.to_f).to eq(0.0)
+    expect(result.min_of_views).to eq(0)
+    expect(result.max_of_views).to eq(0)
+
+    expect(result.sum_expr_views).to eq(0)
+    expect(result.avg_expr_views.to_f).to eq(0.0)
+    expect(result.min_expr_views).to eq(0)
+    expect(result.max_expr_views).to eq(0)
   end
 end

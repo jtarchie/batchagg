@@ -298,38 +298,46 @@ module BatchAgg
 
     def build_sum_query(base_query, column)
       table = base_query.model.arel_table
-      base_query.select(table[column].sum).to_sql
+      sum_agg = table[column].sum
+      coalesced_sum = Arel::Nodes::NamedFunction.new("COALESCE", [sum_agg, Arel::Nodes.build_quoted(0)])
+      base_query.select(coalesced_sum).to_sql
     end
 
     def build_sum_expression_query(base_query, expression)
-      base_query.select(Arel.sql("SUM(#{expression})")).to_sql
+      base_query.select(Arel.sql("COALESCE(SUM(#{expression}), 0)")).to_sql
     end
 
     def build_avg_query(base_query, column)
       table = base_query.model.arel_table
-      base_query.select(table[column].average).to_sql
+      avg_agg = table[column].average
+      coalesced_avg = Arel::Nodes::NamedFunction.new("COALESCE", [avg_agg, Arel::Nodes.build_quoted(0.0)])
+      base_query.select(coalesced_avg).to_sql
     end
 
     def build_avg_expression_query(base_query, expression)
-      base_query.select(Arel.sql("AVG(#{expression})")).to_sql
+      base_query.select(Arel.sql("COALESCE(AVG(#{expression}), 0.0)")).to_sql
     end
 
     def build_min_query(base_query, column)
       table = base_query.model.arel_table
-      base_query.select(table[column].minimum).to_sql
+      min_agg = table[column].minimum
+      coalesced_min = Arel::Nodes::NamedFunction.new("COALESCE", [min_agg, Arel::Nodes.build_quoted(0)])
+      base_query.select(coalesced_min).to_sql
     end
 
     def build_min_expression_query(base_query, expression)
-      base_query.select(Arel.sql("MIN(#{expression})")).to_sql
+      base_query.select(Arel.sql("COALESCE(MIN(#{expression}), 0)")).to_sql
     end
 
     def build_max_query(base_query, column)
       table = base_query.model.arel_table
-      base_query.select(table[column].maximum).to_sql
+      max_agg = table[column].maximum
+      coalesced_max = Arel::Nodes::NamedFunction.new("COALESCE", [max_agg, Arel::Nodes.build_quoted(0)])
+      base_query.select(coalesced_max).to_sql
     end
 
     def build_max_expression_query(base_query, expression)
-      base_query.select(Arel.sql("MAX(#{expression})")).to_sql
+      base_query.select(Arel.sql("COALESCE(MAX(#{expression}), 0)")).to_sql
     end
 
     def build_string_agg_query(base_query, column, options)
