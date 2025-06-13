@@ -717,9 +717,9 @@ module BatchAgg
       @base_model = base_model
     end
 
-    def build_class(&block)
+    def build_class(&)
       collector = AggregateDefinitionCollector.new
-      collector.instance_eval(&block)
+      collector.instance_eval(&)
       aggregates = collector.aggregates
 
       AggregateResultClass.new(aggregates, @base_model)
@@ -728,9 +728,9 @@ module BatchAgg
 
   # Public DSL module
   module DSL
-    def aggregate(base_model, &block)
+    def aggregate(base_model, &)
       builder = BatchAgg::AggregateBuilder.new(base_model)
-      builder.build_class(&block)
+      builder.build_class(&)
     end
   end
 end

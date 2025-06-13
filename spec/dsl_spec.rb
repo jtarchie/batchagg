@@ -99,7 +99,7 @@ RSpec.describe "BatchAgg DSL" do
           count(:posts_with_title) { |user_scope| user_scope.posts.where(title: "Post 1") }
         end
 
-        expect { @agg = klass.only(user) }.to_not exceed_query_limit(1)
+        expect { @agg = klass.only(user) }.not_to exceed_query_limit(1)
 
         expect(@agg[user.id].total_posts).to eq(10)
         expect(@agg[user.id].posts_with_title).to eq(1)
@@ -121,7 +121,7 @@ RSpec.describe "BatchAgg DSL" do
           count(:posts_with_title) { |user_scope| user_scope.posts.where(title: "Post 1") }
         end
 
-        expect { @results = klass.from(User.all) }.to_not exceed_query_limit(1)
+        expect { @results = klass.from(User.all) }.not_to exceed_query_limit(1)
 
         expect(@results[user1.id].total_posts).to eq(5)
         expect(@results[user1.id].posts_with_title).to eq(1)
@@ -150,7 +150,7 @@ RSpec.describe "BatchAgg DSL" do
           max(:max_views, :views, &:posts)
         end
 
-        expect { @agg = klass.only(user) }.to_not exceed_query_limit(1)
+        expect { @agg = klass.only(user) }.not_to exceed_query_limit(1)
 
         expect(@agg[user.id].total_posts).to eq(3)
         expect(@agg[user.id].total_views).to eq(600)
@@ -172,7 +172,7 @@ RSpec.describe "BatchAgg DSL" do
           count_distinct(:distinct_view_counts, :views, &:posts)
         end
 
-        expect { @agg = klass.only(user) }.to_not exceed_query_limit(1)
+        expect { @agg = klass.only(user) }.not_to exceed_query_limit(1)
 
         expect(@agg[user.id].unique_categories).to eq(2)
         expect(@agg[user.id].distinct_view_counts).to eq(3)
@@ -183,10 +183,10 @@ RSpec.describe "BatchAgg DSL" do
           string_agg(:all_post_titles, :title, delimiter: "; ", &:posts)
         end
 
-        expect { @agg = klass.only(user) }.to_not exceed_query_limit(1)
+        expect { @agg = klass.only(user) }.not_to exceed_query_limit(1)
 
         titles = @agg[user.id].all_post_titles.split("; ").sort
-        expect(titles).to match_array(["Post 1", "Post 2", "Post 3"])
+        expect(titles).to contain_exactly("Post 1", "Post 2", "Post 3")
       end
     end
 
@@ -208,7 +208,7 @@ RSpec.describe "BatchAgg DSL" do
           max_expression(:max_total_score, "views + likes", &:posts)
         end
 
-        expect { @agg = klass.only(user) }.to_not exceed_query_limit(1)
+        expect { @agg = klass.only(user) }.not_to exceed_query_limit(1)
 
         expect(@agg[user.id].total_engagement).to eq(645) # (100+10) + (200+20) + (300+15)
         expect(@agg[user.id].weighted_score).to eq(1425) # (100*2+10*5) + (200*2+20*5) + (300*2+15*5)
@@ -230,7 +230,7 @@ RSpec.describe "BatchAgg DSL" do
           count_distinct_expression(:unique_status_view_combo, "status || '-' || CAST(views AS TEXT)", &:posts)
         end
 
-        expect { @agg = klass.only(user) }.to_not exceed_query_limit(1)
+        expect { @agg = klass.only(user) }.not_to exceed_query_limit(1)
 
         expect(@agg[user.id].published_posts).to eq(2)
         expect(@agg[user.id].high_view_posts).to eq(2) # Posts 2 and 3
@@ -249,10 +249,10 @@ RSpec.describe "BatchAgg DSL" do
           string_agg_expression(:title_lengths, "title || ' (' || LENGTH(title) || ' chars)'", delimiter: "; ", &:posts)
         end
 
-        expect { @agg = klass.only(user) }.to_not exceed_query_limit(1)
+        expect { @agg = klass.only(user) }.not_to exceed_query_limit(1)
 
         priority_titles = @agg[user.id].priority_titles.split(" | ").sort
-        expect(priority_titles).to match_array(["1: Post 1", "2: Post 2", "3: Post 3"])
+        expect(priority_titles).to contain_exactly("1: Post 1", "2: Post 2", "3: Post 3")
 
         title_lengths = @agg[user.id].title_lengths.split("; ")
         expect(title_lengths.all? { |tl| tl.include?("chars)") }).to be true
@@ -275,7 +275,7 @@ RSpec.describe "BatchAgg DSL" do
         column(:first_post_views) { |user_scope| user_scope.posts.limit(1).select(:views) }
       end
 
-      expect { @agg = klass.only(user) }.to_not exceed_query_limit(1)
+      expect { @agg = klass.only(user) }.not_to exceed_query_limit(1)
 
       expect(@agg[user.id].age).to eq(30)
       expect(@agg[user.id].name).to eq("Alice")
@@ -293,7 +293,7 @@ RSpec.describe "BatchAgg DSL" do
         column(:user_views, &:views) # Should use users.views
       end
 
-      expect { @agg = klass.only(user) }.to_not exceed_query_limit(1)
+      expect { @agg = klass.only(user) }.not_to exceed_query_limit(1)
 
       expect(@agg[user.id].total_post_views).to eq(100) # Post views
       expect(@agg[user.id].user_views).to eq(50) # User views
@@ -318,7 +318,7 @@ RSpec.describe "BatchAgg DSL" do
           sum(:profile_views, :views, &:profile)
         end
 
-        expect { @results = klass.from(User.all) }.to_not exceed_query_limit(1)
+        expect { @results = klass.from(User.all) }.not_to exceed_query_limit(1)
 
         # User with profile
         expect(@results[user_with_profile.id].name).to eq("Diana")
@@ -359,7 +359,7 @@ RSpec.describe "BatchAgg DSL" do
           string_agg(:patient_names, :name, delimiter: ", ", &:patients)
         end
 
-        expect { @results = klass.from(Physician.all) }.to_not exceed_query_limit(1)
+        expect { @results = klass.from(Physician.all) }.not_to exceed_query_limit(1)
 
         expect(@results[physician1.id].total_patients).to eq(2)
         physician1_names = @results[physician1.id].patient_names.split(", ").sort
@@ -408,7 +408,7 @@ RSpec.describe "BatchAgg DSL" do
         end
       end
 
-      expect { @agg = klass.only(user) }.to_not exceed_query_limit(1)
+      expect { @agg = klass.only(user) }.not_to exceed_query_limit(1)
 
       expect(@agg[user.id].age).to eq(30)
       expect(@agg[user.id].published_tech_posts).to eq(1) # Only Tech Post 1 is published
@@ -432,7 +432,7 @@ RSpec.describe "BatchAgg DSL" do
         max_expression(:max_expr_views, "views * 2", &:posts)
       end
 
-      expect { @agg = klass.only(user_no_posts) }.to_not exceed_query_limit(1)
+      expect { @agg = klass.only(user_no_posts) }.not_to exceed_query_limit(1)
 
       result = @agg[user_no_posts.id]
       expect(result.sum_of_views).to eq(0)
@@ -465,7 +465,7 @@ RSpec.describe "BatchAgg DSL" do
         string_agg_expression(:title_rating, "title || ' (' || rating || '★)'", delimiter: " | ", &:posts)
       end
 
-      expect { @agg = klass.only(user) }.to_not exceed_query_limit(1)
+      expect { @agg = klass.only(user) }.not_to exceed_query_limit(1)
 
       expect(@agg[user.id].total_posts).to eq(3)
       expect(@agg[user.id].total_views).to eq(450)
@@ -501,11 +501,11 @@ RSpec.describe "BatchAgg DSL" do
 
         computed(:summary_text) do |result|
           "User has #{result.total_posts} posts with #{result.total_views} total views " \
-          "(avg: #{result.avg_views.to_f.round(1)})"
+            "(avg: #{result.avg_views.to_f.round(1)})"
         end
       end
 
-      expect { @agg = klass.only(user) }.to_not exceed_query_limit(1)
+      expect { @agg = klass.only(user) }.not_to exceed_query_limit(1)
 
       expect(@agg[user.id].total_posts).to eq(3)
       expect(@agg[user.id].total_views).to eq(450)
@@ -535,7 +535,7 @@ RSpec.describe "BatchAgg DSL" do
         end
       end
 
-      expect { @agg = klass.only(user) }.to_not exceed_query_limit(1)
+      expect { @agg = klass.only(user) }.not_to exceed_query_limit(1)
 
       expect(@agg[user.id].posts_per_hundred_views).to eq(0.67) # 3/450 * 100
       expect(@agg[user.id].efficiency_rating).to eq("High Volume")
@@ -576,7 +576,7 @@ RSpec.describe "BatchAgg DSL" do
         end
       end
 
-      expect { @agg = klass.only(user) }.to_not exceed_query_limit(1)
+      expect { @agg = klass.only(user) }.not_to exceed_query_limit(1)
 
       expect(@agg[user.id].unique_tags).to match_array(%w[design javascript ruby tech ui])
       expect(@agg[user.id].tag_frequency).to eq({ "tech" => 2, "ruby" => 1, "javascript" => 1, "design" => 1, "ui" => 1 })
