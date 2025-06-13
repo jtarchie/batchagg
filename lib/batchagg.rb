@@ -21,6 +21,10 @@ module BatchAgg
       type == :column
     end
 
+    def computed?
+      type == :computed
+    end
+
     def block?
       !block.nil?
     end
@@ -459,7 +463,9 @@ module BatchAgg
       builders = create_helper_builders(outer_table_alias)
 
       arel_query = create_base_query(scope, outer_table_alias)
-      add_projections_to_query(arel_query, aggregates, builders, outer_table_alias)
+      # Filter out computed aggregates before building SQL projections
+      sql_aggregates = aggregates.reject(&:computed?)
+      add_projections_to_query(arel_query, sql_aggregates, builders, outer_table_alias)
       apply_scope_conditions(arel_query, scope, outer_table_alias)
 
       arel_query
@@ -490,6 +496,7 @@ module BatchAgg
 
     def add_projections_to_query(arel_query, aggregates, builders, _outer_table_alias)
       aggregates.each do |aggregate_def|
+        # At this point, aggregate_def should not be a computed? one due to filtering above
         projection = build_projection_for_aggregate(aggregate_def, builders)
         arel_query.project(projection)
       end
@@ -539,9 +546,16 @@ module BatchAgg
 
   # Represents aggregate results for a single record
   class AggregateResultForRecord
-    def initialize(row_data, aggregate_definitions)
+    def initialize(row_data, all_aggregate_definitions)
       @data = symbolize_keys(row_data)
-      define_aggregate_methods(aggregate_definitions)
+      @all_aggregate_definitions = all_aggregate_definitions
+      @computed_cache = {}
+
+      sql_aggregate_definitions = @all_aggregate_definitions.reject(&:computed?)
+      define_sql_aggregate_methods(sql_aggregate_definitions)
+
+      computed_aggregate_definitions = @all_aggregate_definitions.select(&:computed?)
+      define_computed_aggregate_methods(computed_aggregate_definitions)
     end
 
     private
@@ -550,10 +564,22 @@ module BatchAgg
       hash.transform_keys(&:to_sym)
     end
 
-    def define_aggregate_methods(aggregate_definitions)
-      aggregate_definitions.each do |aggregate_def|
+    def define_sql_aggregate_methods(sql_aggregate_definitions)
+      sql_aggregate_definitions.each do |aggregate_def|
         define_singleton_method(aggregate_def.name) do
           @data[aggregate_def.name]
+        end
+      end
+    end
+
+    def define_computed_aggregate_methods(computed_aggregate_definitions)
+      computed_aggregate_definitions.each do |aggregate_def|
+        define_singleton_method(aggregate_def.name) do
+          return @computed_cache[aggregate_def.name] if @computed_cache.key?(aggregate_def.name)
+
+          value = instance_exec(self, &aggregate_def.block)
+          @computed_cache[aggregate_def.name] = value
+          value
         end
       end
     end
@@ -680,6 +706,10 @@ module BatchAgg
 
     def string_agg_expression(name, expression, delimiter: nil, &block)
       add_aggregate(:string_agg_expression, name, block, expression: expression, options: { delimiter: delimiter })
+    end
+
+    def computed(name, &block)
+      add_aggregate(:computed, name, block)
     end
 
     attr_reader :aggregates

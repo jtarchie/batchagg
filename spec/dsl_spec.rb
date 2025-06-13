@@ -475,4 +475,135 @@ RSpec.describe "BatchAgg DSL" do
       expect(@agg[user.id].title_rating).to include("★)")
     end
   end
+
+  describe "computed aggregations" do
+    let(:user) { User.create!(name: "Alice", age: 30) }
+
+    before do
+      user.posts.create!(title: "Post 1", views: 100)
+      user.posts.create!(title: "Post 2", views: 200)
+      user.posts.create!(title: "Post 3", views: 150)
+    end
+
+    it "supports computed fields based on other aggregations" do
+      klass = aggregate(User) do
+        count(:total_posts, &:posts)
+        sum(:total_views, :views, &:posts)
+        avg(:avg_views, :views, &:posts)
+
+        computed(:engagement_score) do |result|
+          # Complex calculation that would be difficult in SQL
+          base_score = result.total_views * 0.1
+          post_bonus = result.total_posts > 2 ? 50 : 0
+          avg_bonus = result.avg_views > 150 ? 25 : 0
+          (base_score + post_bonus + avg_bonus).round(2)
+        end
+
+        computed(:summary_text) do |result|
+          "User has #{result.total_posts} posts with #{result.total_views} total views " \
+          "(avg: #{result.avg_views.to_f.round(1)})"
+        end
+      end
+
+      expect { @agg = klass.only(user) }.to_not exceed_query_limit(1)
+
+      expect(@agg[user.id].total_posts).to eq(3)
+      expect(@agg[user.id].total_views).to eq(450)
+      expect(@agg[user.id].avg_views.to_f).to eq(150.0)
+      expect(@agg[user.id].engagement_score).to eq(95) # 45 + 50 + 0
+      expect(@agg[user.id].summary_text).to eq("User has 3 posts with 450 total views (avg: 150.0)")
+    end
+
+    it "supports computed fields that depend on other computed fields" do
+      klass = aggregate(User) do
+        count(:total_posts, &:posts)
+        sum(:total_views, :views, &:posts)
+
+        computed(:posts_per_hundred_views) do |result|
+          return 0 if result.total_views == 0
+
+          (result.total_posts.to_f / result.total_views * 100).round(2)
+        end
+
+        computed(:efficiency_rating) do |result|
+          ratio = result.posts_per_hundred_views
+          case ratio
+          when 0...1 then "High Volume"
+          when 1...3 then "Balanced"
+          else "High Frequency"
+          end
+        end
+      end
+
+      expect { @agg = klass.only(user) }.to_not exceed_query_limit(1)
+
+      expect(@agg[user.id].posts_per_hundred_views).to eq(0.67) # 3/450 * 100
+      expect(@agg[user.id].efficiency_rating).to eq("High Volume")
+    end
+
+    it "handles computed fields with complex data structures" do
+      Post.connection.add_column Post.table_name, :tags, :string
+      Post.reset_column_information
+
+      user.posts.first.update!(tags: "tech,ruby")
+      user.posts.second.update!(tags: "tech,javascript")
+      user.posts.third.update!(tags: "design,ui")
+
+      klass = aggregate(User) do
+        string_agg(:all_tags, :tags, delimiter: ",", &:posts)
+        count(:total_posts, &:posts)
+
+        computed(:unique_tags) do |result|
+          return [] if result.all_tags.nil?
+
+          result.all_tags.split(",").map(&:strip).uniq.sort
+        end
+
+        computed(:tag_frequency) do |result|
+          return {} if result.all_tags.nil?
+
+          tags = result.all_tags.split(",").map(&:strip)
+          frequency = Hash.new(0)
+          tags.each { |tag| frequency[tag] += 1 }
+          frequency
+        end
+
+        computed(:most_common_tag) do |result|
+          freq = result.tag_frequency
+          return nil if freq.empty?
+
+          freq.max_by { |_, count| count }[0]
+        end
+      end
+
+      expect { @agg = klass.only(user) }.to_not exceed_query_limit(1)
+
+      expect(@agg[user.id].unique_tags).to match_array(%w[design javascript ruby tech ui])
+      expect(@agg[user.id].tag_frequency).to eq({ "tech" => 2, "ruby" => 1, "javascript" => 1, "design" => 1, "ui" => 1 })
+      expect(@agg[user.id].most_common_tag).to eq("tech")
+    end
+
+    it "computed fields are cached after first access" do
+      call_count = 0
+
+      klass = aggregate(User) do
+        count(:total_posts, &:posts)
+
+        computed(:expensive_calculation) do |result|
+          call_count += 1
+          result.total_posts * 42
+        end
+      end
+
+      @agg = klass.only(user)
+
+      # First access
+      expect(@agg[user.id].expensive_calculation).to eq(126)
+      expect(call_count).to eq(1)
+
+      # Second access should use cached value
+      expect(@agg[user.id].expensive_calculation).to eq(126)
+      expect(call_count).to eq(1) # Should still be 1
+    end
+  end
 end
