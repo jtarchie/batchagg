@@ -55,9 +55,11 @@ module BatchAgg
     end
 
     def build_correlation_condition(reflection)
-      if belongs_to_association?(reflection)
+      if reflection.through_reflection
+        build_has_many_through_condition(reflection)
+      elsif belongs_to_association?(reflection)
         build_belongs_to_condition(reflection)
-      else
+      else # has_many or has_one (direct)
         build_has_many_condition(reflection)
       end
     end
@@ -80,6 +82,34 @@ module BatchAgg
       primary_key_column = @outer_table_alias[reflection.active_record_primary_key]
 
       foreign_key_column.eq(primary_key_column)
+    end
+
+    def build_has_many_through_condition(reflection)
+      through_reflection = reflection.through_reflection
+      source_reflection = reflection.source_reflection
+
+      final_target_table = reflection.klass.arel_table
+      through_table = through_reflection.klass.arel_table
+
+      # Condition 1: Links the through_table to the final_target_table
+      # Based on source_reflection (e.g., Appointment.belongs_to :patient)
+      cond1_arel = if source_reflection.macro == :belongs_to
+                     through_table[source_reflection.foreign_key].eq(final_target_table[source_reflection.association_primary_key])
+                   else # :has_many, :has_one
+                     final_target_table[source_reflection.foreign_key].eq(through_table[source_reflection.active_record_primary_key])
+                   end
+
+      # Condition 2: Links the through_table to the @outer_table_alias (base model)
+      # Based on through_reflection (e.g., Physician.has_many :appointments)
+      cond2_arel = if through_reflection.macro == :belongs_to
+                     @outer_table_alias[through_reflection.foreign_key].eq(through_table[through_reflection.association_primary_key])
+                   else # :has_many, :has_one
+                     through_table[through_reflection.foreign_key].eq(@outer_table_alias[through_reflection.active_record_primary_key])
+                   end
+
+      subquery = through_table.project(Arel.sql("1"))
+                              .where(cond1_arel.and(cond2_arel))
+      subquery.exists
     end
   end
 

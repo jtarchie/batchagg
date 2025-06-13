@@ -549,4 +549,74 @@ RSpec.describe "DSL" do
     expect(@results[user_without_profile.id].verified).to be_nil
     expect(@results[user_without_profile.id].profile_views).to be_nil
   end
+
+  with_model :Physician do
+    table
+    model do
+      has_many :appointments, dependent: :destroy
+      has_many :patients, through: :appointments
+    end
+  end
+
+  with_model :Patient do
+    table do |t|
+      t.string :name
+    end
+    model do
+      has_many :appointments, dependent: :destroy
+      has_many :physicians, through: :appointments
+    end
+  end
+
+  with_model :Appointment do
+    table do |t|
+      t.belongs_to :physician
+      t.belongs_to :patient
+      t.datetime :appointment_date
+    end
+    model do
+      belongs_to :physician
+      belongs_to :patient
+    end
+  end
+
+  it "handles has_many :through associations" do
+    physician1 = Physician.create!
+    physician2 = Physician.create!
+
+    patient1 = Patient.create!(name: "Pat1")
+    patient2 = Patient.create!(name: "Pat2")
+    patient3 = Patient.create!(name: "Pat3")
+
+    # Physician1 sees Pat1, Pat2
+    Appointment.create!(physician: physician1, patient: patient1)
+    Appointment.create!(physician: physician1, patient: patient2)
+
+    # Physician2 sees Pat2, Pat3
+    Appointment.create!(physician: physician2, patient: patient2)
+    Appointment.create!(physician: physician2, patient: patient3)
+
+    klass = aggregate(Physician) do
+      count(:total_patients, &:patients)
+      string_agg(:patient_names, :name, delimiter: ", ", &:patients)
+    end
+
+    expect do
+      @results = klass.from(Physician.all)
+    end.to_not exceed_query_limit(1)
+
+    expect(@results[physician1.id].total_patients).to eq(2)
+    physician1_patient_names = @results[physician1.id].patient_names.split(", ").sort
+    expect(physician1_patient_names).to match_array(%w[Pat1 Pat2])
+
+    expect(@results[physician2.id].total_patients).to eq(2)
+    physician2_patient_names = @results[physician2.id].patient_names.split(", ").sort
+    expect(physician2_patient_names).to match_array(%w[Pat2 Pat3])
+
+    # Test with a single physician
+    expect do
+      @agg_single = klass.only(physician1)
+    end.to_not exceed_query_limit(1)
+    expect(@agg_single[physician1.id].total_patients).to eq(2)
+  end
 end
