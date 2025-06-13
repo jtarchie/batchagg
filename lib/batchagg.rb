@@ -62,6 +62,26 @@ module BatchAgg
     end
   end
 
+  # Helper class to access attributes on the outer table alias
+  class OuterTableAttributeAccessor
+    def initialize(outer_table_alias_node, base_model_class)
+      @outer_table_alias_node = outer_table_alias_node
+      @base_model_class = base_model_class
+    end
+
+    def method_missing(method_name, *args, &block_arg)
+      if args.empty? && block_arg.nil? && @base_model_class.columns_hash.key?(method_name.to_s)
+        @outer_table_alias_node[method_name]
+      else
+        super
+      end
+    end
+
+    def respond_to_missing?(method_name, include_private = false)
+      @base_model_class.columns_hash.key?(method_name.to_s) || super
+    end
+  end
+
   class QueryBuilder
     def initialize(base_model)
       @base_model = base_model
@@ -70,13 +90,26 @@ module BatchAgg
     def build_query_for_scope(scope, aggregates)
       outer_table_alias = @base_model.arel_table.alias("batchagg_outer_#{@base_model.table_name}")
       correlation_builder = CorrelatedRelationBuilder.new(@base_model, outer_table_alias)
+      outer_table_accessor = OuterTableAttributeAccessor.new(outer_table_alias, @base_model)
       projections = [outer_table_alias[@base_model.primary_key].as(@base_model.primary_key.to_s)]
 
       aggregates.each do |aggregate_def|
         if aggregate_def.type == :column
-          # For column access, directly project from the outer table alias
-          projections << outer_table_alias[aggregate_def.column].as(aggregate_def.name.to_s)
+          if aggregate_def.block.nil?
+            # Handles direct column access like `column(:age)`
+            # In this case, aggregate_def.column stores the source column name (which is the same as aggregate_def.name)
+            projections << outer_table_alias[aggregate_def.column].as(aggregate_def.name.to_s)
+          else
+            # Handles aliased column access like `column(:aliased_aged, &:age)`
+            # The block is called with an accessor for the outer table.
+            source_arel_attribute = aggregate_def.block.call(outer_table_accessor)
+            raise ArgumentError, "Block for column aggregate '#{aggregate_def.name}' must return an Arel attribute or SQL literal." unless source_arel_attribute.is_a?(Arel::Attributes::Attribute) || source_arel_attribute.is_a?(Arel::Nodes::SqlLiteral)
+
+            projections << source_arel_attribute.as(aggregate_def.name.to_s)
+
+          end
         else
+          # Handles other aggregate types (sum, count, etc.)
           correlated_relation = aggregate_def.block.call(correlation_builder)
           subquery_sql = build_subquery_for_aggregate(correlated_relation, aggregate_def)
           projections << Arel.sql("(#{subquery_sql})").as(aggregate_def.name.to_s)
@@ -257,8 +290,8 @@ module BatchAgg
 
     public
 
-    def column(name)
-      add_aggregate(:column, name, nil, column: name)
+    def column(name, &block)
+      add_aggregate(:column, name, block, column: name)
     end
 
     def count(name, &block)
