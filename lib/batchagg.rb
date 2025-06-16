@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require "ostruct"
 require "active_record"
 
 module BatchAgg
