@@ -374,6 +374,7 @@ RSpec.describe "BatchAgg DSL" do
 
   describe "complex queries and joins" do
     let(:user) { User.create!(name: "Alice", age: 30) }
+    let(:other_user) { User.create!(name: "Bob", age: 25) }
     let!(:tech_category) { Category.create!(name: "Technology", priority: 1) }
     let!(:sports_category) { Category.create!(name: "Sports", priority: 2) }
 
@@ -387,11 +388,14 @@ RSpec.describe "BatchAgg DSL" do
       user.posts.create!(title: "Tech Post 2", views: 200, category: tech_category, published: false)
       user.posts.create!(title: "Sports Post 1", views: 150, category: sports_category, published: true)
       user.posts.create!(title: "Uncategorized Post", views: 50, published: true)
+
+      other_user.posts.create!(title: "Other User Post", views: 300, category: tech_category, published: false)
     end
 
     it "handles complex joins and filtering conditions" do
       klass = aggregate(User) do
         column(:age)
+        count(:all_unpublished_posts) { Post.where(published: false) }
         count(:published_tech_posts) do |user_scope|
           user_scope.posts
                     .joins(:category)
@@ -412,6 +416,7 @@ RSpec.describe "BatchAgg DSL" do
 
       expect(@agg[user.id].age).to eq(30)
       expect(@agg[user.id].published_tech_posts).to eq(1) # Only Tech Post 1 is published
+      expect(@agg[user.id].all_unpublished_posts).to eq(2) # Only Tech Post 1 is published
       expect(@agg[user.id].high_priority_views).to eq(450) # 100 + 200 + 150 (all categorized posts)
       expect(@agg[user.id].category_weighted_score).to eq(600) # (100*1) + (200*1) + (150*2)
     end
