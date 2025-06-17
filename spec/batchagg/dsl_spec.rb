@@ -4,8 +4,8 @@ require "active_record"
 require "rspec-sqlimit"
 ActiveRecord::Base.establish_connection(adapter: "sqlite3", database: ":memory:")
 
-RSpec.describe "BatchAgg DSL" do
-  include BatchAgg::DSL
+RSpec.describe BatchAgg::DSL do
+  include described_class
 
   # Test models setup
   with_model :User do
