@@ -1,4 +1,6 @@
 module Batchagg
   VERSION: String
-  # See the writing guide of rbs: https://github.com/ruby/rbs#guides
+  module DSL
+    def aggregate: (untyped base_model) { () -> void } -> AggregateResultClass
+  end
 end
