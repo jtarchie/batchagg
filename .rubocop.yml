@@ -42,9 +42,6 @@ Layout/LineLength:
 Style/Documentation:
   Enabled: false
 
-Gemspec/DevelopmentDependencies:
-  Enabled: false
-
 RSpec/InstanceVariable:
   Enabled: false
 
