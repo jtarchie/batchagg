@@ -23,6 +23,8 @@ gem 'batchagg'
 ### Example 1: Aggregations for a single user
 
 ```ruby
+include BatchAgg::DSL
+
 # Define the aggregations you need
 user_stats = aggregate(User) do
   count(:total_posts, &:posts)
@@ -44,6 +46,8 @@ puts "Average rating: #{stats[user.id].avg_rating}"
 ### Example 2: Aggregations for multiple users
 
 ```ruby
+include BatchAgg::DSL
+
 # Define the aggregations you need
 user_stats = aggregate(User) do
   count(:total_posts, &:posts)
