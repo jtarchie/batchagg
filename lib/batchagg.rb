@@ -162,7 +162,9 @@ module BatchAgg
       # Apply where conditions from scope to outer table
       if scope.respond_to?(:where_values_hash)
         scope.where_values_hash.each do |col, val|
-          arel.where(outer[col].eq(val)) if @model.columns_hash.key?(col.to_s)
+          if @model.columns_hash.key?(col.to_s)
+            arel.where(val.is_a?(Array) ? outer[col].in(val) : outer[col].eq(val))
+          end
         end
       end
       arel

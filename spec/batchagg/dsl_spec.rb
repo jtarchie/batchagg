@@ -123,10 +123,30 @@ RSpec.describe BatchAgg::DSL do
 
         expect { @results = klass.from(User.all) }.not_to exceed_query_limit(1)
 
+        expect(@results.count).to eq(2)
         expect(@results[user1.id].total_posts).to eq(5)
         expect(@results[user1.id].posts_with_title).to eq(1)
         expect(@results[user2.id].total_posts).to eq(3)
         expect(@results[user2.id].posts_with_title).to eq(1)
+      end
+
+      it "handles scoped users" do
+        klass = aggregate(User) do
+          count(:total_posts, &:posts)
+          count(:posts_with_title) { |user_scope| user_scope.posts.where(title: "Post 1") }
+        end
+
+        expect { @results = klass.from(User.where(id: [user1.id] + (10_000..10_100).to_a)) }.not_to exceed_query_limit(1)
+
+        expect(@results.count).to eq(1)
+        expect(@results[user1.id].total_posts).to eq(5)
+        expect(@results[user1.id].posts_with_title).to eq(1)
+
+        expect { @results = klass.from(User.where(id: user1.id)) }.not_to exceed_query_limit(1)
+
+        expect(@results.count).to eq(1)
+        expect(@results[user1.id].total_posts).to eq(5)
+        expect(@results[user1.id].posts_with_title).to eq(1)
       end
     end
   end
