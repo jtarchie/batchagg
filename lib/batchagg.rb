@@ -3,734 +3,254 @@
 require "active_record"
 
 module BatchAgg
-  # Represents a single aggregate function definition
-  class AggregateDefinition
-    attr_reader :name, :type, :block, :column, :expression, :options
-
-    def initialize(name, type, block, column = nil, expression = nil, options = nil)
-      @name = name
-      @type = type
-      @block = block
-      @column = column
-      @expression = expression
-      @options = options
-    end
-
-    def column_based?
-      type == :column
-    end
-
-    def computed?
-      type == :computed
-    end
-
-    def block?
-      !block.nil?
-    end
+  AggregateDef = Struct.new(:name, :type, :block, :column, :expression, :options, keyword_init: true) do
+    def column_based? = type == :column
+    def computed? = type == :computed
+    def block? = !block.nil?
   end
 
-  # Handles association traversal for correlated subqueries
-  class AssociationResolver
-    def initialize(base_model_class, outer_table_alias)
-      @base_model_class = base_model_class
-      @outer_table_alias = outer_table_alias
+  class AssocMagic
+    def initialize(model, outer_table)
+      @model = model
+      @outer_table = outer_table
     end
 
-    def resolve_association(association_name)
-      reflection = find_association_reflection(association_name)
-      target_class = reflection.klass
-      correlation_condition = build_correlation_condition(reflection)
+    def method_missing(name, *args, &)
+      reflection = @model.reflect_on_association(name)
+      if reflection
+        target = reflection.klass
+        if reflection.through_reflection
+          # has_many :through
+          through = reflection.through_reflection
+          source = reflection.source_reflection
+          final_target = reflection.klass.arel_table
+          through_table = through.klass.arel_table
 
-      target_class.where(correlation_condition)
-    end
+          cond1 = if source.macro == :belongs_to
+                    through_table[source.foreign_key].eq(final_target[source.association_primary_key])
+                  else
+                    final_target[source.foreign_key].eq(through_table[source.active_record_primary_key])
+                  end
 
-    def association?(association_name)
-      @base_model_class.reflect_on_association(association_name).present?
-    end
+          cond2 = if through.macro == :belongs_to
+                    @outer_table[through.foreign_key].eq(through_table[through.association_primary_key])
+                  else
+                    through_table[through.foreign_key].eq(@outer_table[through.active_record_primary_key])
+                  end
 
-    private
-
-    def find_association_reflection(association_name)
-      reflection = @base_model_class.reflect_on_association(association_name)
-      raise NoMethodError, "Association '#{association_name}' not found" unless reflection
-
-      reflection
-    end
-
-    def build_correlation_condition(reflection)
-      if reflection.through_reflection
-        build_has_many_through_condition(reflection)
-      elsif belongs_to_association?(reflection)
-        build_belongs_to_condition(reflection)
-      else # has_many or has_one (direct)
-        build_has_many_condition(reflection)
-      end
-    end
-
-    def belongs_to_association?(reflection)
-      reflection.macro == :belongs_to
-    end
-
-    def build_belongs_to_condition(reflection)
-      target_table = reflection.klass.arel_table
-      foreign_key_column = @outer_table_alias[reflection.foreign_key]
-      primary_key_column = target_table[reflection.association_primary_key]
-
-      primary_key_column.eq(foreign_key_column)
-    end
-
-    def build_has_many_condition(reflection)
-      target_table = reflection.klass.arel_table
-      foreign_key_column = target_table[reflection.foreign_key]
-      primary_key_column = @outer_table_alias[reflection.active_record_primary_key]
-
-      foreign_key_column.eq(primary_key_column)
-    end
-
-    def build_has_many_through_condition(reflection)
-      through_reflection = reflection.through_reflection
-      source_reflection = reflection.source_reflection
-
-      final_target_table = reflection.klass.arel_table
-      through_table = through_reflection.klass.arel_table
-
-      # Condition 1: Links the through_table to the final_target_table
-      # Based on source_reflection (e.g., Appointment.belongs_to :patient)
-      cond1_arel = if source_reflection.macro == :belongs_to
-                     through_table[source_reflection.foreign_key].eq(final_target_table[source_reflection.association_primary_key])
-                   else # :has_many, :has_one
-                     final_target_table[source_reflection.foreign_key].eq(through_table[source_reflection.active_record_primary_key])
-                   end
-
-      # Condition 2: Links the through_table to the @outer_table_alias (base model)
-      # Based on through_reflection (e.g., Physician.has_many :appointments)
-      cond2_arel = if through_reflection.macro == :belongs_to
-                     @outer_table_alias[through_reflection.foreign_key].eq(through_table[through_reflection.association_primary_key])
-                   else # :has_many, :has_one
-                     through_table[through_reflection.foreign_key].eq(@outer_table_alias[through_reflection.active_record_primary_key])
-                   end
-
-      subquery = through_table.project(Arel.sql("1"))
-                              .where(cond1_arel.and(cond2_arel))
-      subquery.exists
-    end
-  end
-
-  # Provides method_missing interface for association access in aggregate blocks
-  class CorrelatedRelationBuilder
-    def initialize(base_model_class, outer_table_alias)
-      @association_resolver = AssociationResolver.new(base_model_class, outer_table_alias)
-    end
-
-    def method_missing(association_name, *args, &block_arg)
-      validate_method_call(association_name, args, block_arg)
-      @association_resolver.resolve_association(association_name)
-    end
-
-    def respond_to_missing?(method_name, include_private = false)
-      @association_resolver.association?(method_name) || super
-    end
-
-    private
-
-    def validate_method_call(association_name, args, block_arg)
-      return unless args.any? || block_arg
-
-      raise ArgumentError,
-            "Unexpected arguments or block for association '#{association_name}' in aggregate definition."
-    end
-  end
-
-  # Provides access to outer table attributes in aggregate blocks
-  class OuterTableAttributeAccessor
-    def initialize(outer_table_alias, base_model_class)
-      @outer_table_alias = outer_table_alias
-      @base_model_class = base_model_class
-    end
-
-    def method_missing(method_name, *args, &block_arg)
-      return super unless valid_attribute_access?(method_name, args, block_arg)
-
-      @outer_table_alias[method_name]
-    end
-
-    def respond_to_missing?(method_name, include_private = false)
-      column?(method_name) || super
-    end
-
-    private
-
-    def valid_attribute_access?(method_name, args, block_arg)
-      args.empty? && block_arg.nil? && column?(method_name)
-    end
-
-    def column?(method_name)
-      @base_model_class.columns_hash.key?(method_name.to_s)
-    end
-  end
-
-  # Handles building SQL projections for column aggregates
-  class ColumnProjectionBuilder
-    def initialize(outer_table_alias, base_model_class)
-      @outer_table_alias = outer_table_alias
-      @attribute_accessor = OuterTableAttributeAccessor.new(outer_table_alias, base_model_class)
-    end
-
-    def build_projection(aggregate_def, correlation_builder)
-      if aggregate_def.block?
-        build_block_based_projection(aggregate_def, correlation_builder)
+          subquery = through_table.project(Arel.sql("1")).where(cond1.and(cond2))
+          target.where(subquery.exists)
+        elsif reflection.macro == :belongs_to
+          target.where(target.arel_table[reflection.association_primary_key].eq(@outer_table[reflection.foreign_key]))
+        else
+          target.where(target.arel_table[reflection.foreign_key].eq(@outer_table[reflection.active_record_primary_key]))
+        end
       else
-        build_direct_attribute_projection(aggregate_def)
+        super
       end
     end
 
-    private
-
-    def build_direct_attribute_projection(aggregate_def)
-      @outer_table_alias[aggregate_def.column].as(aggregate_def.name.to_s)
-    end
-
-    def build_block_based_projection(aggregate_def, correlation_builder)
-      if (aliased_attribute_projection = try_aliased_attribute(aggregate_def))
-        aliased_attribute_projection
-      else
-        build_subquery_projection(aggregate_def, correlation_builder)
-      end
-    end
-
-    def try_aliased_attribute(aggregate_def)
-      value = aggregate_def.block.call(@attribute_accessor)
-      return nil unless arel_attribute_or_literal?(value)
-
-      value.as(aggregate_def.name.to_s)
-    rescue NoMethodError, ArgumentError
-      nil
-    end
-
-    def arel_attribute_or_literal?(value)
-      value.is_a?(Arel::Attributes::Attribute) || value.is_a?(Arel::Nodes::SqlLiteral)
-    end
-
-    def build_subquery_projection(aggregate_def, correlation_builder)
-      relation = aggregate_def.block.call(correlation_builder)
-      validate_subquery_relation(relation, aggregate_def.name)
-
-      subquery_sql = relation.to_sql
-      Arel.sql("(#{subquery_sql})").as(aggregate_def.name.to_s)
-    rescue StandardError => e
-      raise ArgumentError,
-            "Block for column aggregate '#{aggregate_def.name}' failed. " \
-            "Not a valid aliased attribute or subquery. Error: #{e.message}"
-    end
-
-    def validate_subquery_relation(relation, aggregate_name)
-      return if relation.is_a?(ActiveRecord::Relation)
-
-      raise ArgumentError,
-            "Block for column subquery '#{aggregate_name}' must return an ActiveRecord::Relation. " \
-            "Got: #{relation.class}"
+    def respond_to_missing?(name, *)
+      @model.reflect_on_association(name) || super
     end
   end
 
-  # Builds SQL for aggregate functions (count, sum, etc.)
-  class AggregateSubqueryBuilder
-    def build_subquery_sql(relation, aggregate_def)
-      base_query = relation.except(:select)
+  class AttrMagic
+    def initialize(model, outer_table)
+      @model = model
+      @outer_table = outer_table
+    end
 
-      case aggregate_def.type
+    def method_missing(name, *args, &)
+      if @model.columns_hash.key?(name.to_s)
+        @outer_table[name]
+      else
+        super
+      end
+    end
+
+    def respond_to_missing?(name, *)
+      @model.columns_hash.key?(name.to_s) || super
+    end
+  end
+
+  class ColumnProj
+    def initialize(outer_table, model)
+      @outer_table = outer_table
+      @attr_magic = AttrMagic.new(model, outer_table)
+    end
+
+    def build(defn, corr)
+      if defn.block?
+        val = begin
+          defn.block.call(@attr_magic)
+        rescue StandardError
+          nil
+        end
+        return val.as(defn.name.to_s) if val.is_a?(Arel::Attributes::Attribute) || val.is_a?(Arel::Nodes::SqlLiteral)
+
+        rel = defn.block.call(corr)
+        Arel.sql("(#{rel.to_sql})").as(defn.name.to_s)
+      else
+        @outer_table[defn.column].as(defn.name.to_s)
+      end
+    end
+  end
+
+  module AggSQL
+    def self.sql(relation, defn)
+      q = relation.except(:select)
+      t = q.model.arel_table
+      case defn.type
       when :count
-        build_count_query(base_query)
+        q.select(Arel.star.count).to_sql
       when :count_expression
-        build_count_expression_query(base_query, aggregate_def.expression)
+        q.select(Arel.sql("COUNT(#{defn.expression})")).to_sql
       when :count_distinct
-        build_count_distinct_query(base_query, aggregate_def.column)
+        q.select(t[defn.column].count(true)).to_sql
       when :count_distinct_expression
-        build_count_distinct_expression_query(base_query, aggregate_def.expression)
+        q.select(Arel.sql("COUNT(DISTINCT #{defn.expression})")).to_sql
       when :sum
-        build_sum_query(base_query, aggregate_def.column)
+        q.select(Arel::Nodes::NamedFunction.new("COALESCE", [t[defn.column].sum, Arel::Nodes.build_quoted(0)])).to_sql
       when :sum_expression
-        build_sum_expression_query(base_query, aggregate_def.expression)
+        q.select(Arel.sql("COALESCE(SUM(#{defn.expression}), 0)")).to_sql
       when :avg
-        build_avg_query(base_query, aggregate_def.column)
+        q.select(Arel::Nodes::NamedFunction.new("COALESCE", [t[defn.column].average, Arel::Nodes.build_quoted(0.0)])).to_sql
       when :avg_expression
-        build_avg_expression_query(base_query, aggregate_def.expression)
+        q.select(Arel.sql("COALESCE(AVG(#{defn.expression}), 0.0)")).to_sql
       when :min
-        build_min_query(base_query, aggregate_def.column)
+        q.select(Arel::Nodes::NamedFunction.new("COALESCE", [t[defn.column].minimum, Arel::Nodes.build_quoted(0)])).to_sql
       when :min_expression
-        build_min_expression_query(base_query, aggregate_def.expression)
+        q.select(Arel.sql("COALESCE(MIN(#{defn.expression}), 0)")).to_sql
       when :max
-        build_max_query(base_query, aggregate_def.column)
+        q.select(Arel::Nodes::NamedFunction.new("COALESCE", [t[defn.column].maximum, Arel::Nodes.build_quoted(0)])).to_sql
       when :max_expression
-        build_max_expression_query(base_query, aggregate_def.expression)
+        q.select(Arel.sql("COALESCE(MAX(#{defn.expression}), 0)")).to_sql
       when :string_agg
-        build_string_agg_query(base_query, aggregate_def.column, aggregate_def.options)
+        delim = defn.options&.dig(:delimiter)
+        args = [t[defn.column]]
+        args << Arel::Nodes.build_quoted(delim) if delim
+        q.select(Arel::Nodes::NamedFunction.new("GROUP_CONCAT", args)).to_sql
       when :string_agg_expression
-        build_string_agg_expression_query(base_query, aggregate_def.expression, aggregate_def.options)
+        delim = defn.options&.dig(:delimiter)
+        args = [Arel.sql(defn.expression)]
+        args << Arel::Nodes.build_quoted(delim) if delim
+        q.select(Arel::Nodes::NamedFunction.new("GROUP_CONCAT", args)).to_sql
       else
-        raise ArgumentError, "Unsupported aggregate type: #{aggregate_def.type}"
+        raise "Unknown aggregate type: #{defn.type}"
       end
-    end
-
-    private
-
-    def build_count_query(base_query)
-      base_query.select(Arel.star.count).to_sql
-    end
-
-    def build_count_expression_query(base_query, expression)
-      base_query.select(Arel.sql("COUNT(#{expression})")).to_sql
-    end
-
-    def build_count_distinct_query(base_query, column)
-      table = base_query.model.arel_table
-      base_query.select(table[column].count(true)).to_sql
-    end
-
-    def build_count_distinct_expression_query(base_query, expression)
-      base_query.select(Arel.sql("COUNT(DISTINCT #{expression})")).to_sql
-    end
-
-    def build_sum_query(base_query, column)
-      table = base_query.model.arel_table
-      sum_agg = table[column].sum
-      coalesced_sum = Arel::Nodes::NamedFunction.new("COALESCE", [sum_agg, Arel::Nodes.build_quoted(0)])
-      base_query.select(coalesced_sum).to_sql
-    end
-
-    def build_sum_expression_query(base_query, expression)
-      base_query.select(Arel.sql("COALESCE(SUM(#{expression}), 0)")).to_sql
-    end
-
-    def build_avg_query(base_query, column)
-      table = base_query.model.arel_table
-      avg_agg = table[column].average
-      coalesced_avg = Arel::Nodes::NamedFunction.new("COALESCE", [avg_agg, Arel::Nodes.build_quoted(0.0)])
-      base_query.select(coalesced_avg).to_sql
-    end
-
-    def build_avg_expression_query(base_query, expression)
-      base_query.select(Arel.sql("COALESCE(AVG(#{expression}), 0.0)")).to_sql
-    end
-
-    def build_min_query(base_query, column)
-      table = base_query.model.arel_table
-      min_agg = table[column].minimum
-      coalesced_min = Arel::Nodes::NamedFunction.new("COALESCE", [min_agg, Arel::Nodes.build_quoted(0)])
-      base_query.select(coalesced_min).to_sql
-    end
-
-    def build_min_expression_query(base_query, expression)
-      base_query.select(Arel.sql("COALESCE(MIN(#{expression}), 0)")).to_sql
-    end
-
-    def build_max_query(base_query, column)
-      table = base_query.model.arel_table
-      max_agg = table[column].maximum
-      coalesced_max = Arel::Nodes::NamedFunction.new("COALESCE", [max_agg, Arel::Nodes.build_quoted(0)])
-      base_query.select(coalesced_max).to_sql
-    end
-
-    def build_max_expression_query(base_query, expression)
-      base_query.select(Arel.sql("COALESCE(MAX(#{expression}), 0)")).to_sql
-    end
-
-    def build_string_agg_query(base_query, column, options)
-      table = base_query.model.arel_table
-      delimiter = options&.dig(:delimiter)
-
-      args = [table[column]]
-      args << Arel::Nodes.build_quoted(delimiter) if delimiter
-
-      base_query.select(Arel::Nodes::NamedFunction.new("GROUP_CONCAT", args)).to_sql
-    end
-
-    def build_string_agg_expression_query(base_query, expression, options)
-      delimiter = options&.dig(:delimiter)
-
-      args = [Arel.sql(expression)]
-      args << Arel::Nodes.build_quoted(delimiter) if delimiter
-
-      base_query.select(Arel::Nodes::NamedFunction.new("GROUP_CONCAT", args)).to_sql
     end
   end
 
-  # Handles applying WHERE conditions from scope to outer table alias
-  class ScopeConditionApplier
-    def initialize(base_model, outer_table_alias)
-      @base_model = base_model
-      @outer_table_alias = outer_table_alias
+  class Query
+    def initialize(model, aggs)
+      @model = model
+      @aggs = aggs
     end
 
-    def apply_conditions_to_query(arel_query, scope)
-      processed_columns = apply_simple_where_conditions(arel_query, scope)
-      apply_arel_where_conditions(arel_query, scope, processed_columns)
-    end
-
-    private
-
-    def apply_simple_where_conditions(arel_query, scope)
-      processed_columns = []
-
-      return processed_columns unless scope.respond_to?(:where_values_hash)
-      return processed_columns unless scope.where_values_hash.is_a?(Hash)
-
-      scope.where_values_hash.each do |column_name, value|
-        column_name_str = column_name.to_s
-
-        if model_column?(column_name_str)
-          arel_query.where(@outer_table_alias[column_name.to_sym].eq(value))
-          processed_columns << column_name_str
+    def build(scope)
+      outer = @model.arel_table.alias("batchagg_outer_#{@model.table_name}")
+      corr = AssocMagic.new(@model, outer)
+      colproj = ColumnProj.new(outer, @model)
+      arel = Arel::SelectManager.new(scope.klass.connection)
+      arel.from(outer)
+      arel.project(outer[@model.primary_key].as(@model.primary_key.to_s))
+      @aggs.reject(&:computed?).each do |agg|
+        proj = agg.column_based? ? colproj.build(agg, corr) : Arel.sql("(#{AggSQL.sql(agg.block.call(corr), agg)})").as(agg.name.to_s)
+        arel.project(proj)
+      end
+      # Apply where conditions from scope to outer table
+      if scope.respond_to?(:where_values_hash)
+        scope.where_values_hash.each do |col, val|
+          arel.where(outer[col].eq(val)) if @model.columns_hash.key?(col.to_s)
         end
       end
-
-      processed_columns
-    end
-
-    def apply_arel_where_conditions(arel_query, scope, processed_columns)
-      where_clauses = extract_where_clauses(scope)
-
-      where_clauses.each do |constraint|
-        next unless simple_table_constraint?(constraint, processed_columns)
-
-        apply_constraint_to_query(arel_query, constraint)
-      end
-    end
-
-    def extract_where_clauses(scope)
-      scope.arel.ast.cores.flat_map(&:wheres)
-    end
-
-    def simple_table_constraint?(constraint, processed_columns)
-      return false unless constraint.left.is_a?(Arel::Attributes::Attribute)
-      return false unless constraint.left.relation.name == @base_model.table_name
-      return false if processed_columns.include?(constraint.left.name.to_s)
-
-      true
-    end
-
-    def apply_constraint_to_query(arel_query, constraint)
-      if constraint.is_a?(Arel::Nodes::Equality)
-        apply_equality_constraint(arel_query, constraint)
-      elsif constraint.is_a?(Arel::Nodes::In)
-        apply_in_constraint(arel_query, constraint)
-      end
-    end
-
-    def apply_equality_constraint(arel_query, constraint)
-      column_name = constraint.left.name
-      value = constraint.right
-      arel_query.where(@outer_table_alias[column_name].eq(value))
-    end
-
-    def apply_in_constraint(arel_query, constraint)
-      column_name = constraint.left.name
-      values = extract_in_clause_values(constraint.right)
-      arel_query.where(@outer_table_alias[column_name].in(values))
-    end
-
-    def extract_in_clause_values(right_operand)
-      return right_operand unless right_operand.is_a?(Array)
-
-      right_operand.map do |value|
-        value.is_a?(Arel::Nodes::BindParam) ? value.value.value_before_type_cast : value
-      end
-    end
-
-    def model_column?(column_name)
-      @base_model.columns_hash.key?(column_name)
+      arel
     end
   end
 
-  # Main query builder that orchestrates the SQL generation
-  class QueryBuilder
-    def initialize(base_model)
-      @base_model = base_model
-      @subquery_builder = AggregateSubqueryBuilder.new
-    end
-
-    def build_query_for_scope(scope, aggregates)
-      outer_table_alias = create_outer_table_alias
-      builders = create_helper_builders(outer_table_alias)
-
-      arel_query = create_base_query(scope, outer_table_alias)
-      # Filter out computed aggregates before building SQL projections
-      sql_aggregates = aggregates.reject(&:computed?)
-      add_projections_to_query(arel_query, sql_aggregates, builders, outer_table_alias)
-      apply_scope_conditions(arel_query, scope, outer_table_alias)
-
-      arel_query
-    end
-
-    private
-
-    def create_outer_table_alias
-      @base_model.arel_table.alias("batchagg_outer_#{@base_model.table_name}")
-    end
-
-    def create_helper_builders(outer_table_alias)
-      {
-        correlation: CorrelatedRelationBuilder.new(@base_model, outer_table_alias),
-        column_projection: ColumnProjectionBuilder.new(outer_table_alias, @base_model)
-      }
-    end
-
-    def create_base_query(scope, outer_table_alias)
-      arel_query = Arel::SelectManager.new(scope.klass.connection)
-      arel_query.from(outer_table_alias)
-
-      primary_key_projection = outer_table_alias[@base_model.primary_key].as(@base_model.primary_key.to_s)
-      arel_query.project(primary_key_projection)
-
-      arel_query
-    end
-
-    def add_projections_to_query(arel_query, aggregates, builders, _outer_table_alias)
-      aggregates.each do |aggregate_def|
-        # At this point, aggregate_def should not be a computed? one due to filtering above
-        projection = build_projection_for_aggregate(aggregate_def, builders)
-        arel_query.project(projection)
-      end
-    end
-
-    def build_projection_for_aggregate(aggregate_def, builders)
-      if aggregate_def.column_based?
-        builders[:column_projection].build_projection(aggregate_def, builders[:correlation])
-      else
-        build_aggregate_function_projection(aggregate_def, builders[:correlation])
-      end
-    end
-
-    def build_aggregate_function_projection(aggregate_def, correlation_builder)
-      correlated_relation = aggregate_def.block.call(correlation_builder)
-      subquery_sql = @subquery_builder.build_subquery_sql(correlated_relation, aggregate_def)
-      Arel.sql("(#{subquery_sql})").as(aggregate_def.name.to_s)
-    end
-
-    def apply_scope_conditions(arel_query, scope, outer_table_alias)
-      condition_applier = ScopeConditionApplier.new(@base_model, outer_table_alias)
-      condition_applier.apply_conditions_to_query(arel_query, scope)
-    end
-  end
-
-  # Handles type casting of primary key values for hash keys
-  class PrimaryKeyTypeConverter
-    def self.cast_for_hash_key(id_value, model_class)
-      primary_key_column = find_primary_key_column(model_class)
-      type_converter = create_type_converter(primary_key_column)
-      type_converter.deserialize(id_value)
-    end
-
-    def self.find_primary_key_column(model_class)
-      model_class.columns_hash[model_class.primary_key]
-    end
-
-    def self.create_type_converter(primary_key_column)
-      ActiveRecord::Type.lookup(
-        primary_key_column.type,
-        limit: primary_key_column.limit,
-        precision: primary_key_column.precision,
-        scale: primary_key_column.scale
-      )
-    end
-  end
-
-  # Represents aggregate results for a single record
-  class AggregateResultForRecord
-    def initialize(row_data, all_aggregate_definitions)
-      @data = symbolize_keys(row_data)
-      @all_aggregate_definitions = all_aggregate_definitions
-      @computed_cache = {}
-
-      sql_aggregate_definitions = @all_aggregate_definitions.reject(&:computed?)
-      define_sql_aggregate_methods(sql_aggregate_definitions)
-
-      computed_aggregate_definitions = @all_aggregate_definitions.select(&:computed?)
-      define_computed_aggregate_methods(computed_aggregate_definitions)
-    end
-
-    private
-
-    def symbolize_keys(hash)
-      hash.transform_keys(&:to_sym)
-    end
-
-    def define_sql_aggregate_methods(sql_aggregate_definitions)
-      sql_aggregate_definitions.each do |aggregate_def|
-        define_singleton_method(aggregate_def.name) do
-          @data[aggregate_def.name]
-        end
-      end
-    end
-
-    def define_computed_aggregate_methods(computed_aggregate_definitions)
-      computed_aggregate_definitions.each do |aggregate_def|
-        define_singleton_method(aggregate_def.name) do
-          return @computed_cache[aggregate_def.name] if @computed_cache.key?(aggregate_def.name)
-
-          value = instance_exec(self, &aggregate_def.block)
-          @computed_cache[aggregate_def.name] = value
-          value
-        end
-      end
-    end
-  end
-
-  # Orchestrates query execution and result processing
-  class AggregateResultProcessor
-    def initialize(aggregates, base_model)
-      @aggregates = aggregates
-      @base_model = base_model
-      @query_builder = QueryBuilder.new(base_model)
-    end
-
-    def process_single_record(record)
-      scope = create_single_record_scope(record)
-      process_scope(scope)
-    end
-
-    def process_scope(scope)
-      query_results = execute_query(scope)
-      convert_results_to_hash(query_results, scope.klass)
-    end
-
-    private
-
-    def create_single_record_scope(record)
-      @base_model.where(@base_model.primary_key => record.id)
-    end
-
-    def execute_query(scope)
-      query_arel = @query_builder.build_query_for_scope(scope, @aggregates)
-      scope.klass.connection.select_all(query_arel.to_sql).to_a
-    end
-
-    def convert_results_to_hash(query_results, model_class)
-      query_results.each_with_object({}) do |row_hash, result_hash|
-        record_id = extract_and_cast_record_id(row_hash, model_class)
-        result_hash[record_id] = AggregateResultForRecord.new(row_hash, @aggregates)
-      end
-    end
-
-    def extract_and_cast_record_id(row_hash, model_class)
-      raw_id = row_hash[@base_model.primary_key.to_s]
-      PrimaryKeyTypeConverter.cast_for_hash_key(raw_id, model_class)
-    end
-  end
-
-  # Main class that provides the public API for aggregate results
-  class AggregateResultClass
-    def initialize(aggregates, base_model)
-      @processor = AggregateResultProcessor.new(aggregates, base_model)
+  class Runner
+    def initialize(aggs, model)
+      @aggs = aggs
+      @model = model
+      @query = Query.new(model, aggs)
+      @result_class = build_result_class(aggs)
     end
 
     def only(record)
-      @processor.process_single_record(record)
+      from(@model.where(@model.primary_key => record.id))
     end
 
     def from(scope)
-      @processor.process_scope(scope)
+      rows = scope.klass.connection.select_all(@query.build(scope).to_sql).to_a
+      rows.each_with_object({}) do |row, h|
+        id = row[@model.primary_key.to_s]
+        h[@model.primary_key ? id : row.keys.first] = @result_class.new(row)
+      end
     end
-  end
-
-  # Builder for creating aggregate definitions using DSL methods
-  class AggregateDefinitionCollector
-    def initialize
-      @aggregates = []
-    end
-
-    def column(name, &block)
-      add_aggregate(:column, name, block, column: name)
-    end
-
-    def count(name, &block)
-      add_aggregate(:count, name, block)
-    end
-
-    def count_distinct(name, column, &block)
-      add_aggregate(:count_distinct, name, block, column: column)
-    end
-
-    def count_expression(name, expression, &block)
-      add_aggregate(:count_expression, name, block, expression: expression)
-    end
-
-    def count_distinct_expression(name, expression, &block)
-      add_aggregate(:count_distinct_expression, name, block, expression: expression)
-    end
-
-    def sum(name, column, &block)
-      add_aggregate(:sum, name, block, column: column)
-    end
-
-    def sum_expression(name, expression, &block)
-      add_aggregate(:sum_expression, name, block, expression: expression)
-    end
-
-    def avg(name, column, &block)
-      add_aggregate(:avg, name, block, column: column)
-    end
-
-    def avg_expression(name, expression, &block)
-      add_aggregate(:avg_expression, name, block, expression: expression)
-    end
-
-    def min(name, column, &block)
-      add_aggregate(:min, name, block, column: column)
-    end
-
-    def min_expression(name, expression, &block)
-      add_aggregate(:min_expression, name, block, expression: expression)
-    end
-
-    def max(name, column, &block)
-      add_aggregate(:max, name, block, column: column)
-    end
-
-    def max_expression(name, expression, &block)
-      add_aggregate(:max_expression, name, block, expression: expression)
-    end
-
-    def string_agg(name, column, delimiter: nil, &block)
-      add_aggregate(:string_agg, name, block, column: column, options: { delimiter: delimiter })
-    end
-
-    def string_agg_expression(name, expression, delimiter: nil, &block)
-      add_aggregate(:string_agg_expression, name, block, expression: expression, options: { delimiter: delimiter })
-    end
-
-    def computed(name, &block)
-      add_aggregate(:computed, name, block)
-    end
-
-    attr_reader :aggregates
 
     private
 
-    def add_aggregate(type, name, block, column: nil, expression: nil, options: nil)
-      @aggregates << AggregateDefinition.new(name, type, block, column, expression, options)
+    def build_result_class(aggs)
+      klass = Class.new do
+        define_method(:initialize) do |row|
+          @data = row.transform_keys(&:to_sym)
+          @cache = {}
+        end
+      end
+      aggs.reject(&:computed?).each do |agg|
+        klass.define_method(agg.name) { @data[agg.name] }
+      end
+      aggs.select(&:computed?).each do |agg|
+        klass.define_method(agg.name) do
+          @cache[agg.name] ||= instance_exec(self, &agg.block)
+        end
+      end
+      klass
     end
   end
 
-  # Main builder that coordinates the DSL and creates the result class
-  class AggregateBuilder
-    def initialize(base_model)
-      @base_model = base_model
+  class Collector
+    attr_reader :aggs
+
+    def initialize = @aggs = []
+    def column(name, &block) = add(:column, name, block, column: name)
+    def count(name, &block) = add(:count, name, block)
+    def count_distinct(name, column, &block) = add(:count_distinct, name, block, column: column)
+    def count_expression(name, expr, &block) = add(:count_expression, name, block, expression: expr)
+    def count_distinct_expression(name, expr, &block) = add(:count_distinct_expression, name, block, expression: expr)
+    def sum(name, column, &block) = add(:sum, name, block, column: column)
+    def sum_expression(name, expr, &block) = add(:sum_expression, name, block, expression: expr)
+    def avg(name, column, &block) = add(:avg, name, block, column: column)
+    def avg_expression(name, expr, &block) = add(:avg_expression, name, block, expression: expr)
+    def min(name, column, &block) = add(:min, name, block, column: column)
+    def min_expression(name, expr, &block) = add(:min_expression, name, block, expression: expr)
+    def max(name, column, &block) = add(:max, name, block, column: column)
+    def max_expression(name, expr, &block) = add(:max_expression, name, block, expression: expr)
+    def string_agg(name, column, delimiter: nil, &block) = add(:string_agg, name, block, column: column, options: { delimiter: delimiter })
+    def string_agg_expression(name, expr, delimiter: nil, &block) = add(:string_agg_expression, name, block, expression: expr, options: { delimiter: delimiter })
+    def computed(name, &block) = add(:computed, name, block)
+
+    private
+
+    def add(type, name, block, column: nil, expression: nil, options: nil)
+      @aggs << AggregateDef.new(name: name, type: type, block: block, column: column, expression: expression, options: options)
     end
+  end
+
+  class Builder
+    def initialize(model) = @model = model
 
     def build_class(&)
-      collector = AggregateDefinitionCollector.new
-      collector.instance_eval(&)
-      aggregates = collector.aggregates
-
-      AggregateResultClass.new(aggregates, @base_model)
+      col = Collector.new
+      col.instance_eval(&)
+      Runner.new(col.aggs, @model)
     end
   end
 
-  # Public DSL module
   module DSL
-    def aggregate(base_model, &)
-      builder = BatchAgg::AggregateBuilder.new(base_model)
-      builder.build_class(&)
+    def aggregate(model, &)
+      Builder.new(model).build_class(&)
     end
   end
 end
