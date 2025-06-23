@@ -12,6 +12,11 @@ collection of records without making repeated database queries. It uses
 correlated subqueries to fetch all aggregations in a single efficient database
 call, improving application performance.
 
+### Unsupported
+
+Because of the composing of SQL statements, there will never be support for `group` or `GROUP BY`.
+Please don't open an issue about this, unless you have an idea to solve it.
+
 ## Installation
 
 ```ruby
