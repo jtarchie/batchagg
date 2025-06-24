@@ -29,3 +29,5 @@ jobs:
         uses: docker/setup-buildx-action@v3
       - name: Run the default task
         run: bundle exec rake
+      - name: Run the test task
+        run: bundle exec rspec
