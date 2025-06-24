@@ -669,6 +669,50 @@ RSpec.shared_examples "batchagg dsl" do
       expect(@agg[user.id].posts_with_title).to eq(10)
     end
   end
+
+  describe "window function aggregations" do
+    let(:user) { User.create!(name: "Alice") }
+    let(:user2) { User.create!(name: "Bob") }
+
+    before do
+      Post.connection.add_column Post.table_name, :score, :integer, default: 0 unless Post.column_names.include?("score")
+      Post.reset_column_information
+
+      user.posts.create!(title: "Post 1", views: 100, score: 10)
+      user.posts.create!(title: "Post 2", views: 200, score: 20)
+      user.posts.create!(title: "Post 3", views: 150, score: 15)
+
+      user2.posts.create!(title: "Post A", views: 300, score: 30)
+      user2.posts.create!(title: "Post B", views: 250, score: 25)
+    end
+
+    it "computes row_number and rank for posts per user" do
+      if ActiveRecord::Base.connection.adapter_name.downcase == "mysql2"
+        skip "Window functions not supported in MySQL"
+        return
+      end
+
+      klass = aggregate(Post) do
+        column(:user_id)
+        column(:title)
+        custom(:row_number, "ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY views DESC)")
+      end
+
+      posts = Post.order(:user_id, views: :desc)
+      expect { @agg = klass.from(posts) }.not_to exceed_query_limit(1)
+
+      # Check Alice's posts
+      alice_posts = posts.where(user_id: user.id)
+      expect(@agg[alice_posts.first.id].row_number).to eq(1)
+      expect(@agg[alice_posts.second.id].row_number).to eq(2)
+      expect(@agg[alice_posts.third.id].row_number).to eq(3)
+
+      # Check Bob's posts
+      bob_posts = posts.where(user_id: user2.id)
+      expect(@agg[bob_posts.first.id].row_number).to eq(1)
+      expect(@agg[bob_posts.second.id].row_number).to eq(2)
+    end
+  end
 end
 
 DATABASES.each do |db|

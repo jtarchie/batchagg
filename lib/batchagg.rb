@@ -6,6 +6,7 @@ module BatchAgg
   AggregateDef = Struct.new(:name, :type, :block, :column, :expression, :options, keyword_init: true) do
     def column_based? = type == :column
     def computed? = type == :computed
+    def custom? = type == :custom
     def block? = !block.nil?
   end
 
@@ -272,17 +273,20 @@ module BatchAgg
       arel.from(outer)
       arel.project(outer[@model.primary_key].as(@model.primary_key.to_s))
       @aggs.reject(&:computed?).each do |agg|
-        proj = if agg.column_based?
-                 colproj.build(agg, corr, **kwargs)
-               else
-                 block = agg.block
-                 relation = if block.parameters.any? { |type, _| %i[key keyreq keyrest].include?(type) }
-                              block.call(corr, **kwargs)
-                            else
-                              block.call(corr)
-                            end
-                 Arel.sql("(#{AggSQL.sql(relation, agg)})").as(agg.name.to_s)
-               end
+        proj =
+          if agg.custom?
+            Arel.sql("#{agg.expression}").as(agg.name.to_s)
+          elsif agg.column_based?
+            colproj.build(agg, corr, **kwargs)
+          else
+            block = agg.block
+            relation = if block.parameters.any? { |type, _| %i[key keyreq keyrest].include?(type) }
+                         block.call(corr, **kwargs)
+                       else
+                         block.call(corr)
+                       end
+            Arel.sql("(#{AggSQL.sql(relation, agg)})").as(agg.name.to_s)
+          end
         arel.project(proj)
       end
       arel.where(
@@ -357,6 +361,7 @@ module BatchAgg
     def string_agg(name, column, delimiter: nil, &block) = add(:string_agg, name, block, column: column, options: { delimiter: delimiter })
     def string_agg_expression(name, expr, delimiter: nil, &block) = add(:string_agg_expression, name, block, expression: expr, options: { delimiter: delimiter })
     def computed(name, &block) = add(:computed, name, block)
+    def custom(name, sql) = add(:custom, name, nil, expression: sql)
 
     private
 
