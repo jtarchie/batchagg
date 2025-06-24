@@ -15,6 +15,9 @@
 # it.
 #
 # See https://rubydoc.info/gems/rspec-core/RSpec/Core/Configuration
+require "simplecov"
+SimpleCov.start
+
 require "with_model"
 require_relative "../lib/batchagg"
 RSpec.configure do |config|
