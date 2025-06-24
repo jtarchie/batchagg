@@ -62,3 +62,8 @@ DATABASES = [
     }
   }
 ].freeze
+
+at_exit do
+  system("docker rm -f batchagg_pg > /dev/null 2>&1") unless ENV["SKIP_POSTGRES"]
+  system("docker rm -f batchagg_mysql > /dev/null 2>&1") unless ENV["SKIP_MYSQL"]
+end
