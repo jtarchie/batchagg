@@ -80,16 +80,27 @@ module BatchAgg
       @attr_magic = AttrMagic.new(model, outer_table)
     end
 
-    def build(defn, corr)
+    def build(defn, corr, **)
       if defn.block?
+        block = defn.block
+        has_kwargs = block.parameters.any? { |type, _| %i[key keyreq keyrest].include?(type) }
+
         val = begin
-          defn.block.call(@attr_magic)
+          if has_kwargs
+            block.call(@attr_magic, **)
+          else
+            block.call(@attr_magic)
+          end
         rescue StandardError
           nil
         end
         return val.as(defn.name.to_s) if val.is_a?(Arel::Attributes::Attribute) || val.is_a?(Arel::Nodes::SqlLiteral)
 
-        rel = defn.block.call(corr)
+        rel = if has_kwargs
+                block.call(corr, **)
+              else
+                block.call(corr)
+              end
         Arel.sql("(#{rel.to_sql})").as(defn.name.to_s)
       else
         @outer_table[defn.column].as(defn.name.to_s)
@@ -148,7 +159,7 @@ module BatchAgg
       @aggs = aggs
     end
 
-    def build(scope)
+    def build(scope, **kwargs)
       outer = @model.arel_table.alias("batchagg_outer_#{@model.table_name}")
       corr = AssocMagic.new(@model, outer)
       colproj = ColumnProj.new(outer, @model)
@@ -156,7 +167,17 @@ module BatchAgg
       arel.from(outer)
       arel.project(outer[@model.primary_key].as(@model.primary_key.to_s))
       @aggs.reject(&:computed?).each do |agg|
-        proj = agg.column_based? ? colproj.build(agg, corr) : Arel.sql("(#{AggSQL.sql(agg.block.call(corr), agg)})").as(agg.name.to_s)
+        proj = if agg.column_based?
+                 colproj.build(agg, corr, **kwargs)
+               else
+                 block = agg.block
+                 relation = if block.parameters.any? { |type, _| %i[key keyreq keyrest].include?(type) }
+                              block.call(corr, **kwargs)
+                            else
+                              block.call(corr)
+                            end
+                 Arel.sql("(#{AggSQL.sql(relation, agg)})").as(agg.name.to_s)
+               end
         arel.project(proj)
       end
       arel.where(
@@ -176,12 +197,12 @@ module BatchAgg
       @result_class = build_result_class(aggs)
     end
 
-    def only(record)
-      from(@model.where(@model.primary_key => record.id))
+    def only(record, **)
+      from(@model.where(@model.primary_key => record.id), **)
     end
 
-    def from(scope)
-      rows = scope.klass.connection.select_all(@query.build(scope).to_sql).to_a
+    def from(scope, **)
+      rows = scope.klass.connection.select_all(@query.build(scope, **).to_sql).to_a
       rows.each_with_object({}) do |row, h|
         id = row[@model.primary_key.to_s]
         h[@model.primary_key ? id : row.keys.first] = @result_class.new(row)

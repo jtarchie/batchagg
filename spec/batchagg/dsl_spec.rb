@@ -637,4 +637,36 @@ RSpec.describe BatchAgg::DSL do
       expect(call_count).to eq(1) # Should still be 1
     end
   end
+
+  describe "when passing parameters to aggregations" do
+    it "allows passing parameters to aggregation methods" do
+      klass = aggregate(User) do
+        count(:total_posts, &:posts)
+        count(:posts_with_title) { |user_scope, title:| user_scope.posts.where(title: title) }
+      end
+
+      user = User.create!(name: "Alice")
+      user.posts.create!(title: "Post 1")
+
+      10.times do
+        user.posts.create!(title: "Post 2")
+      end
+
+      expect { @agg = klass.only(user, title: "Post 1") }.not_to exceed_query_limit(1)
+      expect(@agg[user.id].total_posts).to eq(11)
+      expect(@agg[user.id].posts_with_title).to eq(1)
+
+      expect { @agg = klass.only(user, title: "Post 2") }.not_to exceed_query_limit(1)
+      expect(@agg[user.id].total_posts).to eq(11)
+      expect(@agg[user.id].posts_with_title).to eq(10)
+
+      expect { @agg = klass.from(User.all, title: "Post 1") }.not_to exceed_query_limit(1)
+      expect(@agg[user.id].total_posts).to eq(11)
+      expect(@agg[user.id].posts_with_title).to eq(1)
+
+      expect { @agg = klass.from(User.all, title: "Post 2") }.not_to exceed_query_limit(1)
+      expect(@agg[user.id].total_posts).to eq(11)
+      expect(@agg[user.id].posts_with_title).to eq(10)
+    end
+  end
 end
