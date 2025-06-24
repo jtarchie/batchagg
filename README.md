@@ -159,3 +159,35 @@ tests run against all three databases.
   for aggregate values.
 
 If you have ideas for overcoming these limitations, contributions are welcome!
+
+### What Not To Do
+
+BatchAgg does **not** support SQL `GROUP BY` or ActiveRecord's `.group`.\
+**Do not** try to use BatchAgg for grouped aggregations or per-group summaries.
+
+For example, this will **not** work:
+
+```ruby
+# 🚫 This will NOT work with BatchAgg!
+include BatchAgg::DSL
+
+user_stats = aggregate(User) do
+  count(:posts_per_country) { |user| user.posts.group(:country_id) }
+end
+
+# This will raise or return incorrect results!
+stats = user_stats.from(User.all)
+stats.each do |user_id, stat|
+  puts stat.posts_per_country # 🚫 Not supported!
+end
+```
+
+BatchAgg is designed for **per-record correlated subqueries**, not grouped
+results.\
+If you need grouped aggregations (e.g., counts per country), use standard
+ActiveRecord queries:
+
+```ruby
+# ✅ Use standard ActiveRecord for grouped results
+User.joins(:posts).group('users.country_id').count
+```
