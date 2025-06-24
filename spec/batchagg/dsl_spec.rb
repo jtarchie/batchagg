@@ -150,11 +150,9 @@ RSpec.describe BatchAgg::DSL do
         expect(@results[user1.id].total_posts).to eq(5)
         expect(@results[user1.id].posts_with_title).to eq(1)
 
-        expect { @results = klass.from(User.with_name(user1.name)) }.not_to exceed_query_limit(1)
+        expect { @results = klass.from(User.where.missing(:posts)) }.not_to exceed_query_limit(1)
 
-        expect(@results.count).to eq(1)
-        expect(@results[user1.id].total_posts).to eq(5)
-        expect(@results[user1.id].posts_with_title).to eq(1)
+        expect(@results.count).to eq(0)
       end
     end
   end

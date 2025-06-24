@@ -159,14 +159,11 @@ module BatchAgg
         proj = agg.column_based? ? colproj.build(agg, corr) : Arel.sql("(#{AggSQL.sql(agg.block.call(corr), agg)})").as(agg.name.to_s)
         arel.project(proj)
       end
-      # Apply where conditions from scope to outer table
-      if scope.respond_to?(:where_values_hash)
-        scope.where_values_hash.each do |col, val|
-          if @model.columns_hash.key?(col.to_s)
-            arel.where(val.is_a?(Array) ? outer[col].in(val) : outer[col].eq(val))
-          end
-        end
-      end
+      arel.where(
+        outer[@model.primary_key].in(
+          Arel.sql("(#{scope.select(@model.primary_key).to_sql})")
+        )
+      )
       arel
     end
   end
