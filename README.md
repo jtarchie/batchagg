@@ -26,12 +26,15 @@ gem 'batchagg'
 
 ## Usage
 
-### Example 1: Aggregations for a single user
+BatchAgg lets you define multiple aggregations on ActiveRecord models and fetch
+them efficiently in a single query. You can use it for counts, sums, averages,
+min/max, string aggregation, and even computed fields.
+
+### Basic Example: Aggregations for a Single User
 
 ```ruby
 include BatchAgg::DSL
 
-# Define the aggregations you need
 user_stats = aggregate(User) do
   count(:total_posts, &:posts)
   count(:published_posts) { |user| user.posts.where(status: 'published') }
@@ -39,22 +42,20 @@ user_stats = aggregate(User) do
   avg(:avg_rating, :rating, &:posts)
 end
 
-# Get aggregations for a specific user
 user = User.find(1)
 stats = user_stats.only(user)
 
-puts "Total posts: #{stats[user.id].total_posts}"
-puts "Published posts: #{stats[user.id].published_posts}"
-puts "Total views: #{stats[user.id].total_views}"
-puts "Average rating: #{stats[user.id].avg_rating}"
+puts stats[user.id].total_posts
+puts stats[user.id].published_posts
+puts stats[user.id].total_views
+puts stats[user.id].avg_rating
 ```
 
-### Example 2: Aggregations for multiple users
+### Aggregations for Multiple Records
 
 ```ruby
 include BatchAgg::DSL
 
-# Define the aggregations you need
 user_stats = aggregate(User) do
   count(:total_posts, &:posts)
   count(:comments_received) { |user| user.posts.joins(:comments) }
@@ -62,59 +63,99 @@ user_stats = aggregate(User) do
   max(:highest_rating, :rating, &:posts)
 end
 
-# Get aggregations for all active users
 active_users = User.where(active: true)
 stats = user_stats.from(active_users)
 
-# Use the aggregated data
 active_users.each do |user|
-  user_stat = stats[user.id]
-  puts "User #{user.name} has #{user_stat.total_posts} posts"
-  puts "Most recent post titles: #{user_stat.post_titles}"
-  puts "Highest rating: #{user_stat.highest_rating}"
+  puts "#{user.name}: #{stats[user.id].total_posts} posts, titles: #{stats[user.id].post_titles}"
 end
 ```
 
-## Supported Aggregation Types
+### Supported Aggregation Types
 
-- `count`: Count of records
-- `count_distinct`: Count of distinct values for a column
-- `sum`: Sum of a column
-- `avg`: Average of a column
-- `min`: Minimum value of a column
-- `max`: Maximum value of a column
-- `string_agg`: Concatenation of values (GROUP_CONCAT)
+- `count`, `count_distinct`
+- `sum`
+- `avg`
+- `min`, `max`
+- `string_agg` (concatenates values, e.g. post titles)
+- All above also support `_expression` variants for custom SQL expressions.
 
-You can also use the `_expression` variants of these methods for custom SQL
-expressions.
+### Advanced: Computed Fields
 
-## Development
+You can define computed fields that use the results of other aggregations:
 
-After checking out the repo, run `bin/setup` to install dependencies. You can
-also run `bin/console` for an interactive prompt that will allow you to
-experiment.
+```ruby
+user_stats = aggregate(User) do
+  count(:total_posts, &:posts)
+  sum(:total_views, :views, &:posts)
+  computed(:score) do |result|
+    result.total_posts * 10 + result.total_views
+  end
+end
 
-To install this gem onto your local machine, run `bundle exec rake install`. To
-release a new version, update the version number in `version.rb`, and then run
-`bundle exec rake release`, which will create a git tag for the version, push
-git commits and the created tag, and push the `.gem` file to
-[rubygems.org](https://rubygems.org).
+stats = user_stats.only(user)
+puts stats[user.id].score
+```
 
-## Contributing
+### Associations
 
-Bug reports and pull requests are welcome on GitHub at
-https://github.com/jtarchie/batchagg. This project is intended to be a safe,
-welcoming space for collaboration, and contributors are expected to adhere to
-the
-[code of conduct](https://github.com/jtarchie/batchagg/blob/main/CODE_OF_CONDUCT.md).
+BatchAgg supports aggregations over:
 
-## License
+- `has_many`, `has_one`, `belongs_to`
+- `has_many :through`
+- Custom scopes and joins
 
-The gem is available as open source under the terms of the
-[MIT License](https://opensource.org/licenses/MIT).
+Example for `has_many :through`:
 
-## Code of Conduct
+```ruby
+physician_stats = aggregate(Physician) do
+  count(:total_patients, &:patients)
+  string_agg(:patient_names, :name, delimiter: ', ', &:patients)
+end
 
-Everyone interacting in the Batchagg project's codebases, issue trackers, chat
-rooms and mailing lists is expected to follow the
-[code of conduct](https://github.com/jtarchie/batchagg/blob/main/CODE_OF_CONDUCT.md).
+stats = physician_stats.from(Physician.all)
+```
+
+### Passing Parameters
+
+You can pass parameters to your aggregation blocks:
+
+```ruby
+user_stats = aggregate(User) do
+  count(:posts_with_title) { |user, title:| user.posts.where(title: title) }
+end
+
+stats = user_stats.only(user, title: "Hello World")
+```
+
+### Handling NULLs
+
+Aggregations like `sum`, `avg`, `min`, `max` default to `0` (or `0.0` for
+averages) if there are no matching records.
+
+NOTE: This could change in the future, as I'm not sure how it affects others
+code bases.
+
+## Database Compatibility
+
+BatchAgg supports:
+
+- **PostgreSQL**
+- **MySQL**
+- **SQLite**
+
+String aggregation and some SQL expressions are adapted for each database. All
+tests run against all three databases.
+
+## Known Limitations
+
+- **No GROUP BY support:** BatchAgg does not support SQL `GROUP BY` or `.group`
+  in ActiveRecord. It is designed for correlated subqueries per record.
+- **No support for eager loading:** BatchAgg is not a replacement for
+  `.includes` or `.preload`.
+- **Custom SQL expressions:** Use with care and ensure expressions are
+  compatible with your database.
+- **Aggregations only:** BatchAgg is not for fetching associated records, only
+  for aggregate values.
+
+If you have ideas for overcoming these limitations, contributions are welcome!
