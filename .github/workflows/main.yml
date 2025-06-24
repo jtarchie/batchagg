@@ -9,6 +9,8 @@ on:
 
 jobs:
   build:
+    env:
+      SKIP_DOCKER: true
     runs-on: ubuntu-latest
     name: Ruby ${{ matrix.ruby }}
     strategy:
