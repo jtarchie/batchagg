@@ -14,8 +14,9 @@ call, improving application performance.
 
 ### Unsupported
 
-Because of the composing of SQL statements, there will never be support for `group` or `GROUP BY`.
-Please don't open an issue about this, unless you have an idea to solve it.
+Because of the composing of SQL statements, there will never be support for
+`group` or `GROUP BY`. Please don't open an issue about this, unless you have an
+idea to solve it.
 
 ## Installation
 
@@ -102,10 +103,10 @@ git commits and the created tag, and push the `.gem` file to
 ## Contributing
 
 Bug reports and pull requests are welcome on GitHub at
-https://github.com/[USERNAME]/batchagg. This project is intended to be a safe,
+https://github.com/jtarchie/batchagg. This project is intended to be a safe,
 welcoming space for collaboration, and contributors are expected to adhere to
 the
-[code of conduct](https://github.com/[USERNAME]/batchagg/blob/main/CODE_OF_CONDUCT.md).
+[code of conduct](https://github.com/jtarchie/batchagg/blob/main/CODE_OF_CONDUCT.md).
 
 ## License
 
@@ -116,4 +117,4 @@ The gem is available as open source under the terms of the
 
 Everyone interacting in the Batchagg project's codebases, issue trackers, chat
 rooms and mailing lists is expected to follow the
-[code of conduct](https://github.com/[USERNAME]/batchagg/blob/main/CODE_OF_CONDUCT.md).
+[code of conduct](https://github.com/jtarchie/batchagg/blob/main/CODE_OF_CONDUCT.md).
