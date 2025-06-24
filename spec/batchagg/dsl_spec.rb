@@ -2,10 +2,10 @@
 
 require "active_record"
 require "rspec-sqlimit"
-ActiveRecord::Base.establish_connection(adapter: "sqlite3", database: ":memory:")
+require_relative "../support/db_setup"
 
-RSpec.describe BatchAgg::DSL do
-  include described_class
+RSpec.shared_examples "batchagg dsl" do
+  include BatchAgg::DSL
 
   # Test models setup
   with_model :User do
@@ -253,7 +253,7 @@ RSpec.describe BatchAgg::DSL do
         klass = aggregate(User) do
           count_expression(:published_posts, "CASE WHEN status = 'published' THEN 1 END", &:posts)
           count_expression(:high_view_posts, "CASE WHEN views > 150 THEN 1 END", &:posts)
-          count_distinct_expression(:unique_status_view_combo, "status || '-' || CAST(views AS TEXT)", &:posts)
+          count_distinct_expression(:unique_status_view_combo, "concat(status, '-', views)", &:posts)
         end
 
         expect { @agg = klass.only(user) }.not_to exceed_query_limit(1)
@@ -271,8 +271,8 @@ RSpec.describe BatchAgg::DSL do
         user.posts.third.update!(priority: 3)
 
         klass = aggregate(User) do
-          string_agg_expression(:priority_titles, "priority || ': ' || title", delimiter: " | ", &:posts)
-          string_agg_expression(:title_lengths, "title || ' (' || LENGTH(title) || ' chars)'", delimiter: "; ", &:posts)
+          string_agg_expression(:priority_titles, "concat(priority, ': ', title)", delimiter: " | ", &:posts)
+          string_agg_expression(:title_lengths, "concat(title, ' (', LENGTH(title), ' chars)')", delimiter: "; ", &:posts)
         end
 
         expect { @agg = klass.only(user) }.not_to exceed_query_limit(1)
@@ -493,7 +493,7 @@ RSpec.describe BatchAgg::DSL do
         # Expression-based
         count_expression(:high_rated_posts, "CASE WHEN rating >= 4.0 THEN 1 END", &:posts)
         sum_expression(:view_rating_product, "views * rating", &:posts)
-        string_agg_expression(:title_rating, "title || ' (' || rating || '★)'", delimiter: " | ", &:posts)
+        string_agg_expression(:title_rating, "concat(title, ' (', rating, '★)')", delimiter: " | ", &:posts)
       end
 
       expect { @agg = klass.only(user) }.not_to exceed_query_limit(1)
@@ -668,5 +668,22 @@ RSpec.describe BatchAgg::DSL do
       expect(@agg[user.id].total_posts).to eq(11)
       expect(@agg[user.id].posts_with_title).to eq(10)
     end
+  end
+end
+
+DATABASES.each do |db|
+  RSpec.describe "#{db[:name]}: BatchAgg::DSL" do
+    before(:all) do
+      ActiveRecord::Base.establish_connection(db[:config])
+      ActiveRecord::Base.connection
+    rescue StandardError => e
+      skip "Could not connect to #{db[:name]}: #{e}"
+    end
+
+    after(:all) do
+      ActiveRecord::Base.remove_connection
+    end
+
+    it_behaves_like "batchagg dsl"
   end
 end

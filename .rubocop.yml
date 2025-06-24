@@ -62,3 +62,6 @@ RSpec/ContextWording:
 
 RSpec/SpecFilePathFormat:
   Enabled: false
+
+RSpec/BeforeAfterAll:
+  Enabled: false

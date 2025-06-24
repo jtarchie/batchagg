@@ -8,6 +8,8 @@ gemspec
 gem "irb"
 gem "rake", "~> 13.0"
 
+gem "mysql2"
+gem "pg"
 gem "rspec"
 gem "rspec-sqlimit"
 gem "rubocop", "~> 1.21"
