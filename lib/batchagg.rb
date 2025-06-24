@@ -275,7 +275,7 @@ module BatchAgg
       @aggs.reject(&:computed?).each do |agg|
         proj =
           if agg.custom?
-            Arel.sql("#{agg.expression}").as(agg.name.to_s)
+            Arel.sql(agg.expression.to_s).as(agg.name.to_s)
           elsif agg.column_based?
             colproj.build(agg, corr, **kwargs)
           else
