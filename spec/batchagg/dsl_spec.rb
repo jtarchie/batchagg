@@ -774,18 +774,29 @@ RSpec.shared_examples "batchagg dsl" do
   end
 
   describe "combining aggregations for entire scope" do
-    let!(:user1) { User.create!(name: "Alice") }
-    let!(:user2) { User.create!(name: "Bob") }
-
-    before do
-      3.times { |i| user1.posts.create!(title: "Alice Post #{i + 1}") }
-      2.times { |i| user2.posts.create!(title: "Bob Post #{i + 1}") }
-    end
-
     it "aggregates total posts across all users" do
+      # Add a numeric column to Post for aggregation
+      unless Post.column_names.include?("views")
+        Post.connection.add_column Post.table_name, :views, :integer, default: 0
+        Post.reset_column_information
+      end
+
+      # Setup users and posts with views
+      user1 = User.create!(name: "Alice")
+      user2 = User.create!(name: "Bob")
+      user1.posts.create!(title: "Alice Post 1", views: 10)
+      user1.posts.create!(title: "Alice Post 2", views: 20)
+      user1.posts.create!(title: "Alice Post 3", views: 30)
+      user2.posts.create!(title: "Bob Post 1", views: 40)
+      user2.posts.create!(title: "Bob Post 2", views: 50)
+
       klass = aggregate(User) do
         count(:total_users)
         count(:total_posts, &:posts)
+        sum(:total_views, :views, &:posts)
+        avg(:avg_views, :views, &:posts)
+        min(:min_views, :views, &:posts)
+        max(:max_views, :views, &:posts)
         computed(:summary) do |result, value:|
           "#{value} = #{result.total_users} users"
         end
@@ -795,6 +806,10 @@ RSpec.shared_examples "batchagg dsl" do
 
       expect(@agg.total_users).to eq(2)
       expect(@agg.total_posts).to eq(5) # 3 from Alice, 2 from Bob
+      expect(@agg.total_views).to eq(150) # 10+20+30+40+50
+      expect(@agg.avg_views.to_f).to eq(30.0) # 150/5
+      expect(@agg.min_views).to eq(10)
+      expect(@agg.max_views).to eq(50)
       expect(@agg.summary).to eq("something = 2 users")
     end
   end
