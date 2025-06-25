@@ -742,9 +742,22 @@ RSpec.shared_examples "batchagg dsl" do
       expect(@agg[user2.id]).to be_nil
     end
 
-    it "aggregates with the scope applied to the aggregation" do
+    it "aggregates with the where applied to the aggregation" do
       klass = aggregate(User) do
         count(:total_users) { |scope| scope.where(name: "Alice") }
+      end
+
+      # Use the scope in the aggregation
+      expect { @agg = klass.from(User.all) }.not_to exceed_query_limit(1)
+
+      expect(@agg.count).to eq(2)
+      expect(@agg[user1.id].total_users).to eq(1)
+      expect(@agg[user2.id].total_users).to eq(1)
+    end
+
+    it "aggregates with the scope applied to the aggregation" do
+      klass = aggregate(User) do
+        count(:total_users) { |scope| scope.with_name("Alice") }
       end
 
       # Use the scope in the aggregation
