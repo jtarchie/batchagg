@@ -786,12 +786,16 @@ RSpec.shared_examples "batchagg dsl" do
       klass = aggregate(User) do
         count(:total_users)
         count(:total_posts, &:posts)
+        computed(:summary) do |result, value:|
+          "#{value} = #{result.total_users} users"
+        end
       end
 
-      expect { @agg = klass.combined(User.all) }.not_to exceed_query_limit(1)
+      expect { @agg = klass.combined(User.all, value: "something") }.not_to exceed_query_limit(1)
 
       expect(@agg.total_users).to eq(2)
       expect(@agg.total_posts).to eq(5) # 3 from Alice, 2 from Bob
+      expect(@agg.summary).to eq("something = 2 users")
     end
   end
 end

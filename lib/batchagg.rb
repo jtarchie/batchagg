@@ -376,7 +376,21 @@ module BatchAgg
       arel = Arel::SelectManager.new.project(*projections)
       result_row = scope.klass.connection.select_one(arel.to_sql).to_h
       result_row = @driver.normalize_result(result_row)
-      @result_class.new(result_row)
+      result_obj = @result_class.new(result_row, **kwargs)
+
+      # Patch: allow computed fields to access the full result via `results:`
+      @aggs.select(&:computed?).each do |agg|
+        define_singleton = result_obj.method(:define_singleton_method)
+        block = agg.block
+        has_results_kwarg = block.parameters.any? { |type, name| %i[key keyreq].include?(type) && name == :results }
+        next unless has_results_kwarg
+
+        define_singleton.call(agg.name) do |*_args, **_kws|
+          @cache[agg.name] ||= block.call(self, **@kwargs, results: result_obj)
+        end
+      end
+
+      result_obj
     end
 
     private
