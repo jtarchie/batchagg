@@ -280,10 +280,14 @@ module BatchAgg
             colproj.build(agg, corr, **kwargs)
           else
             block = agg.block
-            relation = if block.parameters.any? { |type, _| %i[key keyreq keyrest].include?(type) }
-                         block.call(corr, **kwargs)
+            relation = if block
+                         if block.parameters.any? { |type, _| %i[key keyreq keyrest].include?(type) }
+                           block.call(corr, **kwargs)
+                         else
+                           block.call(corr)
+                         end
                        else
-                         block.call(corr)
+                        scope
                        end
             Arel.sql("(#{AggSQL.sql(relation, agg)})").as(agg.name.to_s)
           end
