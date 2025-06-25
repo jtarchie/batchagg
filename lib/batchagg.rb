@@ -366,20 +366,14 @@ module BatchAgg
     end
 
     def combined(scope, **kwargs)
-      cte_name = "batchagg_scope_#{scope.table_name}"
-      cte_table = Arel::Table.new(cte_name)
-      cte = Arel::Nodes::As.new(cte_table, scope.arel)
-      cte_scope = scope.klass.from(cte_table)
-
-      # Use cte_scope as the main scope for CombinedAssocMagic
-      magic_scope = CombinedAssocMagic.new(scope, join_builder_scope: cte_scope)
+      magic_scope = CombinedAssocMagic.new(scope, join_builder_scope: scope)
       projections = @aggs.reject(&:computed?).map do |agg|
         relation = BatchAgg.call_with_optional_kwargs(agg.block, magic_scope, **kwargs)
         sql_string = AggSQL.sql(relation, agg)
         Arel.sql("(#{sql_string})").as(agg.name.to_s)
       end
 
-      arel = Arel::SelectManager.new.project(*projections).with(cte)
+      arel = Arel::SelectManager.new.project(*projections)
       result_row = scope.klass.connection.select_one(arel.to_sql).to_h
       result_row = @driver.normalize_result(result_row)
       result_obj = @result_class.new(result_row, **kwargs)
