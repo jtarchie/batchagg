@@ -87,6 +87,18 @@ module BatchAgg
     end
   end
 
+  # Join builder for CTE
+  class CteJoinBuilder
+    def initialize(cte_table)
+      @cte_table = cte_table
+    end
+
+    def build(left, right_key)
+      subquery = @cte_table.project(@cte_table[right_key])
+      left.in(subquery)
+    end
+  end
+
   class CombinedAssocMagic
     include AssociationQueryBuilder
 
@@ -109,6 +121,28 @@ module BatchAgg
 
     def respond_to_missing?(name, include_private = false)
       @model.reflect_on_association(name) || @scope.respond_to?(name, include_private) || @model.respond_to?(name, include_private) || super
+    end
+  end
+
+  class CteAssocMagic
+    include AssociationQueryBuilder
+
+    def initialize(model, cte_table)
+      @model = model
+      @cte_table = cte_table
+      @aliased_cte_table = cte_table.alias(model.table_name)
+      @join_builder = CteJoinBuilder.new(cte_table)
+    end
+
+    def method_missing(name, *, &)
+      reflection = @model.reflect_on_association(name)
+      return build_query(reflection, @join_builder) if reflection
+
+      @model.from(@aliased_cte_table).public_send(name, *, &)
+    end
+
+    def respond_to_missing?(name, include_private = false)
+      @model.reflect_on_association(name) || @model.respond_to?(name, include_private) || super
     end
   end
 
@@ -202,6 +236,10 @@ module BatchAgg
 
       def normalize_result(row)
         row # Default: no normalization
+      end
+
+      def supports_cte?
+        true # Assume modern DBs support CTEs by default
       end
     end
 
@@ -305,6 +343,13 @@ module BatchAgg
       }
     }.freeze
 
+    def self.arel_builder(relation, defn)
+      q = relation.except(:select)
+      t = q.model.arel_table
+      builder = SQL_BUILDERS.fetch(defn.type) { raise "Unknown aggregate type: #{defn.type}" }
+      builder.call(q, t, defn).arel
+    end
+
     def self.sql(relation, defn)
       q = relation.except(:select)
       t = q.model.arel_table
@@ -366,15 +411,36 @@ module BatchAgg
     end
 
     def combined(scope, **kwargs)
-      magic_scope = CombinedAssocMagic.new(scope, join_builder_scope: scope)
-      projections = @aggs.reject(&:computed?).map do |agg|
-        relation = BatchAgg.call_with_optional_kwargs(agg.block, magic_scope, **kwargs)
-        sql_string = AggSQL.sql(relation, agg)
-        Arel.sql("(#{sql_string})").as(agg.name.to_s)
-      end
+      if @driver.supports_cte?
+        cte_name = "batchagg_cte_#{@model.table_name}"
+        cte_table = Arel::Table.new(cte_name)
+        # Ensure we select all columns needed for joins
+        cte_relation = scope.select(@model.column_names)
+        cte = Arel::Nodes::As.new(
+          cte_table,
+          Arel.sql("(#{cte_relation.to_sql})")
+        )
 
-      arel = Arel::SelectManager.new.project(*projections)
+        magic_scope = CteAssocMagic.new(@model, cte_table)
+        projections = @aggs.reject(&:computed?).map do |agg|
+          relation = BatchAgg.call_with_optional_kwargs(agg.block, magic_scope, **kwargs)
+          sql_string = AggSQL.sql(relation, agg)
+          Arel.sql("(#{sql_string})").as(agg.name.to_s)
+        end
+
+        arel = Arel::SelectManager.new.project(*projections).with(cte)
+      else
+        magic_scope = CombinedAssocMagic.new(scope, join_builder_scope: scope)
+        projections = @aggs.reject(&:computed?).map do |agg|
+          relation = BatchAgg.call_with_optional_kwargs(agg.block, magic_scope, **kwargs)
+          sql_string = AggSQL.sql(relation, agg)
+          Arel.sql("(#{sql_string})").as(agg.name.to_s)
+        end
+
+        arel = Arel::SelectManager.new.project(*projections)
+      end
       result_row = scope.klass.connection.select_one(arel.to_sql).to_h
+
       result_row = @driver.normalize_result(result_row)
       result_obj = @result_class.new(result_row, **kwargs)
 
