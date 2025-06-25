@@ -719,6 +719,42 @@ RSpec.shared_examples "batchagg dsl" do
       expect(@agg[bob_posts.second.id].row_number).to eq(2)
     end
   end
+
+  describe "scope support" do
+    let!(:user1) { User.create!(name: "Alice") }
+    let!(:user2) { User.create!(name: "Bob") }
+
+    before do
+      3.times { |i| user1.posts.create!(title: "Alice Post #{i + 1}") }
+      2.times { |i| user2.posts.create!(title: "Bob Post #{i + 1}") }
+    end
+
+    it "aggregates only users with a specific name using the scope" do
+      klass = aggregate(User) do
+        count(:total_posts, &:posts)
+      end
+
+      # Use the scope in the query
+      expect { @agg = klass.from(User.with_name("Alice")) }.not_to exceed_query_limit(1)
+
+      expect(@agg.count).to eq(1)
+      expect(@agg[user1.id].total_posts).to eq(3)
+      expect(@agg[user2.id]).to be_nil
+    end
+
+    it "aggregates with the scope applied to the aggregation" do
+      klass = aggregate(User) do
+        count(:total_users) { |scope| scope.where(name: "Alice") }
+      end
+
+      # Use the scope in the aggregation
+      expect { @agg = klass.from(User.all) }.not_to exceed_query_limit(1)
+
+      expect(@agg.count).to eq(2)
+      expect(@agg[user1.id].total_users).to eq(1)
+      expect(@agg[user2.id].total_users).to eq(1)
+    end
+  end
 end
 
 DATABASES.each do |db|

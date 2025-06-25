@@ -16,7 +16,7 @@ module BatchAgg
       @outer_table = outer_table
     end
 
-    def method_missing(name, *args, &)
+    def method_missing(name, *, &)
       reflection = @model.reflect_on_association(name)
       if reflection
         target = reflection.klass
@@ -47,12 +47,12 @@ module BatchAgg
           target.where(target.arel_table[reflection.foreign_key].eq(@outer_table[reflection.active_record_primary_key]))
         end
       else
-        super
+        @model.public_send(name, *, &)
       end
     end
 
     def respond_to_missing?(name, *)
-      @model.reflect_on_association(name) || super
+      @model.reflect_on_association(name) || @model.respond_to?(name) || super
     end
   end
 
@@ -287,7 +287,7 @@ module BatchAgg
                            block.call(corr)
                          end
                        else
-                        scope
+                         scope
                        end
             Arel.sql("(#{AggSQL.sql(relation, agg)})").as(agg.name.to_s)
           end
