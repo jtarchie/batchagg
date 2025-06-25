@@ -371,7 +371,8 @@ module BatchAgg
       cte = Arel::Nodes::As.new(cte_table, scope.arel)
       cte_scope = scope.klass.from(cte_table)
 
-      magic_scope = CombinedAssocMagic.new(scope, join_builder_scope: cte_scope)
+      # Use cte_scope as the main scope for CombinedAssocMagic
+      magic_scope = CombinedAssocMagic.new(cte_scope, join_builder_scope: cte_scope)
       projections = @aggs.reject(&:computed?).map do |agg|
         relation = BatchAgg.call_with_optional_kwargs(agg.block, magic_scope, **kwargs)
         sql_string = AggSQL.sql(relation, agg)
