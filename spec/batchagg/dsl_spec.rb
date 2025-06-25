@@ -768,6 +768,28 @@ RSpec.shared_examples "batchagg dsl" do
       expect(@agg[user2.id].total_users).to eq(1)
     end
   end
+
+  describe "combining aggregations for entire scope" do
+    let!(:user1) { User.create!(name: "Alice") }
+    let!(:user2) { User.create!(name: "Bob") }
+
+    before do
+      3.times { |i| user1.posts.create!(title: "Alice Post #{i + 1}") }
+      2.times { |i| user2.posts.create!(title: "Bob Post #{i + 1}") }
+    end
+
+    it "aggregates total posts across all users" do
+      klass = aggregate(User) do
+        count(:total_users)
+        count(:total_posts, &:posts)
+      end
+
+      expect { @agg = klass.combined(User.all) }.not_to exceed_query_limit(1)
+
+      expect(@agg.total_users).to eq(2)
+      expect(@agg.total_posts).to eq(5) # 3 from Alice, 2 from Bob
+    end
+  end
 end
 
 DATABASES.each do |db|

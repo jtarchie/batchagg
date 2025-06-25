@@ -10,6 +10,55 @@ module BatchAgg
     def block? = !block.nil?
   end
 
+  class CombinedAssocMagic
+    def initialize(scope)
+      @scope = scope
+      @model = scope.model
+    end
+
+    def method_missing(name, *, &)
+      reflection = @model.reflect_on_association(name)
+      if reflection
+        target = reflection.klass
+        if reflection.through_reflection
+          through = reflection.through_reflection
+          source = reflection.source_reflection
+          final_target = reflection.klass.arel_table
+          through_table = through.klass.arel_table
+
+          cond1 = if source.macro == :belongs_to
+                    through_table[source.foreign_key].eq(final_target[source.association_primary_key])
+                  else
+                    final_target[source.foreign_key].eq(through_table[source.active_record_primary_key])
+                  end
+
+          cond2 = if through.macro == :belongs_to
+                    through_table[through.association_primary_key].in(@scope.select(through.foreign_key).arel)
+                  else
+                    through_table[through.foreign_key].in(@scope.select(through.active_record_primary_key).arel)
+                  end
+
+          subquery = through_table.project(Arel.sql("1")).where(cond1.and(cond2))
+          return target.where(subquery.exists)
+        elsif reflection.macro == :belongs_to
+          return target.where(target.arel_table[reflection.association_primary_key].in(@scope.select(reflection.foreign_key).arel))
+        else
+          return target.where(target.arel_table[reflection.foreign_key].in(@scope.select(@model.primary_key).arel))
+        end
+      end
+
+      if @scope.respond_to?(name)
+        @scope.public_send(name, *, &)
+      else
+        @model.public_send(name, *, &)
+      end
+    end
+
+    def respond_to_missing?(name, include_private = false)
+      @model.reflect_on_association(name) || @scope.respond_to?(name, include_private) || @model.respond_to?(name, include_private) || super
+    end
+  end
+
   class AssocMagic
     def initialize(model, outer_table)
       @model = model
@@ -269,7 +318,7 @@ module BatchAgg
       outer = @model.arel_table.alias("batchagg_outer_#{@model.table_name}")
       corr = AssocMagic.new(@model, outer)
       colproj = ColumnProj.new(outer, @model)
-      arel = Arel::SelectManager.new(scope.klass.connection)
+      arel = Arel::SelectManager.new
       arel.from(outer)
       arel.project(outer[@model.primary_key].as(@model.primary_key.to_s))
       @aggs.reject(&:computed?).each do |agg|
@@ -322,6 +371,32 @@ module BatchAgg
         id = row[@model.primary_key.to_s]
         h[@model.primary_key ? id : row.keys.first] = @result_class.new(row)
       end
+    end
+
+    def combined(scope, **kwargs)
+      arel = Arel::SelectManager.new
+      projections = []
+      magic_scope = CombinedAssocMagic.new(scope)
+
+      @aggs.reject(&:computed?).each do |agg|
+        relation = if agg.block
+                     if agg.block.parameters.any? { |type, _| %i[key keyreq keyrest].include?(type) }
+                       agg.block.call(magic_scope, **kwargs)
+                     else
+                       agg.block.call(magic_scope)
+                     end
+                   else
+                     scope
+                   end
+
+        sql_string = AggSQL.sql(relation, agg)
+        projections << Arel.sql("(#{sql_string})").as(agg.name.to_s)
+      end
+
+      arel.project(*projections)
+      result_row = scope.klass.connection.select_one(arel.to_sql).to_h
+      result_row = @driver.normalize_result(result_row)
+      @result_class.new(result_row)
     end
 
     private
