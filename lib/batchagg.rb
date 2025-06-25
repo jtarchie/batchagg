@@ -10,42 +10,95 @@ module BatchAgg
     def block? = !block.nil?
   end
 
+  def self.call_with_optional_kwargs(block, receiver, **)
+    return receiver unless block
+
+    has_kwargs = block.parameters.any? { |type, _| %i[key keyreq keyrest].include?(type) }
+    has_kwargs ? block.call(receiver, **) : block.call(receiver)
+  end
+
+  # Helper for building association queries
+  module AssociationQueryBuilder
+    private
+
+    def build_query(reflection, join_builder)
+      reflection.klass
+      if reflection.through_reflection
+        build_through_query(reflection, join_builder)
+      else
+        build_direct_query(reflection, join_builder)
+      end
+    end
+
+    def build_direct_query(reflection, join_builder)
+      target = reflection.klass
+      target_table = target.arel_table
+      join_condition = if reflection.macro == :belongs_to
+                         join_builder.build(target_table[reflection.association_primary_key], reflection.foreign_key)
+                       else # has_many, has_one
+                         join_builder.build(target_table[reflection.foreign_key], reflection.active_record_primary_key)
+                       end
+      target.where(join_condition)
+    end
+
+    def build_through_query(reflection, join_builder)
+      target = reflection.klass
+      through = reflection.through_reflection
+      source = reflection.source_reflection
+      final_target_table = target.arel_table
+      through_table = through.klass.arel_table
+
+      cond1 = if source.macro == :belongs_to
+                through_table[source.foreign_key].eq(final_target_table[source.association_primary_key])
+              else
+                final_target_table[source.foreign_key].eq(through_table[source.active_record_primary_key])
+              end
+
+      cond2 = if through.macro == :belongs_to
+                join_builder.build(through_table[through.association_primary_key], through.foreign_key)
+              else
+                join_builder.build(through_table[through.foreign_key], through.active_record_primary_key)
+              end
+
+      subquery = through_table.project(Arel.sql("1")).where(cond1.and(cond2))
+      target.where(subquery.exists)
+    end
+  end
+
+  # Join builder for subquery IN (...)
+  class SubqueryJoinBuilder
+    def initialize(scope)
+      @scope = scope
+    end
+
+    def build(left, right_key)
+      left.in(@scope.select(right_key).arel)
+    end
+  end
+
+  # Join builder for correlated subqueries
+  class CorrelatedJoinBuilder
+    def initialize(outer_table)
+      @outer_table = outer_table
+    end
+
+    def build(left, right_key)
+      left.eq(@outer_table[right_key])
+    end
+  end
+
   class CombinedAssocMagic
+    include AssociationQueryBuilder
+
     def initialize(scope)
       @scope = scope
       @model = scope.model
+      @join_builder = SubqueryJoinBuilder.new(@scope)
     end
 
     def method_missing(name, *, &)
       reflection = @model.reflect_on_association(name)
-      if reflection
-        target = reflection.klass
-        if reflection.through_reflection
-          through = reflection.through_reflection
-          source = reflection.source_reflection
-          final_target = reflection.klass.arel_table
-          through_table = through.klass.arel_table
-
-          cond1 = if source.macro == :belongs_to
-                    through_table[source.foreign_key].eq(final_target[source.association_primary_key])
-                  else
-                    final_target[source.foreign_key].eq(through_table[source.active_record_primary_key])
-                  end
-
-          cond2 = if through.macro == :belongs_to
-                    through_table[through.association_primary_key].in(@scope.select(through.foreign_key).arel)
-                  else
-                    through_table[through.foreign_key].in(@scope.select(through.active_record_primary_key).arel)
-                  end
-
-          subquery = through_table.project(Arel.sql("1")).where(cond1.and(cond2))
-          return target.where(subquery.exists)
-        elsif reflection.macro == :belongs_to
-          return target.where(target.arel_table[reflection.association_primary_key].in(@scope.select(reflection.foreign_key).arel))
-        else
-          return target.where(target.arel_table[reflection.foreign_key].in(@scope.select(@model.primary_key).arel))
-        end
-      end
+      return build_query(reflection, @join_builder) if reflection
 
       if @scope.respond_to?(name)
         @scope.public_send(name, *, &)
@@ -60,44 +113,19 @@ module BatchAgg
   end
 
   class AssocMagic
+    include AssociationQueryBuilder
+
     def initialize(model, outer_table)
       @model = model
       @outer_table = outer_table
+      @join_builder = CorrelatedJoinBuilder.new(@outer_table)
     end
 
     def method_missing(name, *, &)
       reflection = @model.reflect_on_association(name)
-      if reflection
-        target = reflection.klass
-        if reflection.through_reflection
-          # has_many :through
-          through = reflection.through_reflection
-          source = reflection.source_reflection
-          final_target = reflection.klass.arel_table
-          through_table = through.klass.arel_table
+      return build_query(reflection, @join_builder) if reflection
 
-          cond1 = if source.macro == :belongs_to
-                    through_table[source.foreign_key].eq(final_target[source.association_primary_key])
-                  else
-                    final_target[source.foreign_key].eq(through_table[source.active_record_primary_key])
-                  end
-
-          cond2 = if through.macro == :belongs_to
-                    @outer_table[through.foreign_key].eq(through_table[through.association_primary_key])
-                  else
-                    through_table[through.foreign_key].eq(@outer_table[through.active_record_primary_key])
-                  end
-
-          subquery = through_table.project(Arel.sql("1")).where(cond1.and(cond2))
-          target.where(subquery.exists)
-        elsif reflection.macro == :belongs_to
-          target.where(target.arel_table[reflection.association_primary_key].eq(@outer_table[reflection.foreign_key]))
-        else
-          target.where(target.arel_table[reflection.foreign_key].eq(@outer_table[reflection.active_record_primary_key]))
-        end
-      else
-        @model.public_send(name, *, &)
-      end
+      @model.public_send(name, *, &)
     end
 
     def respond_to_missing?(name, *)
@@ -132,25 +160,14 @@ module BatchAgg
 
     def build(defn, corr, **)
       if defn.block?
-        block = defn.block
-        has_kwargs = block.parameters.any? { |type, _| %i[key keyreq keyrest].include?(type) }
-
         val = begin
-          if has_kwargs
-            block.call(@attr_magic, **)
-          else
-            block.call(@attr_magic)
-          end
+          BatchAgg.call_with_optional_kwargs(defn.block, @attr_magic, **)
         rescue StandardError
           nil
         end
         return val.as(defn.name.to_s) if val.is_a?(Arel::Attributes::Attribute) || val.is_a?(Arel::Nodes::SqlLiteral)
 
-        rel = if has_kwargs
-                block.call(corr, **)
-              else
-                block.call(corr)
-              end
+        rel = BatchAgg.call_with_optional_kwargs(defn.block, corr, **)
         Arel.sql("(#{rel.to_sql})").as(defn.name.to_s)
       else
         @outer_table[defn.column].as(defn.name.to_s)
@@ -264,47 +281,35 @@ module BatchAgg
   end
 
   module AggSQL
+    SQL_BUILDERS = {
+      count: ->(q, _t, _d) { q.select(Arel.star.count) },
+      count_expression: ->(q, _t, d) { q.select(Arel.sql("COUNT(#{d.expression})")) },
+      count_distinct: ->(q, t, d) { q.select(t[d.column].count(true)) },
+      count_distinct_expression: ->(q, _t, d) { q.select(Arel.sql("COUNT(DISTINCT #{d.expression})")) },
+      sum: ->(q, t, d) { q.select(Arel::Nodes::NamedFunction.new("COALESCE", [t[d.column].sum, Arel::Nodes.build_quoted(0)])) },
+      sum_expression: ->(q, _t, d) { q.select(Arel.sql("COALESCE(SUM(#{d.expression}), 0)")) },
+      avg: ->(q, t, d) { q.select(Arel::Nodes::NamedFunction.new("COALESCE", [t[d.column].average, Arel::Nodes.build_quoted(0.0)])) },
+      avg_expression: ->(q, _t, d) { q.select(Arel.sql("COALESCE(AVG(#{d.expression}), 0.0)")) },
+      min: ->(q, t, d) { q.select(Arel::Nodes::NamedFunction.new("COALESCE", [t[d.column].minimum, Arel::Nodes.build_quoted(0)])) },
+      min_expression: ->(q, _t, d) { q.select(Arel.sql("COALESCE(MIN(#{d.expression}), 0)")) },
+      max: ->(q, t, d) { q.select(Arel::Nodes::NamedFunction.new("COALESCE", [t[d.column].maximum, Arel::Nodes.build_quoted(0)])) },
+      max_expression: ->(q, _t, d) { q.select(Arel.sql("COALESCE(MAX(#{d.expression}), 0)")) },
+      string_agg: lambda { |q, t, d|
+        driver = Drivers.for(q.model.connection)
+        driver.string_agg(q, t[d.column], d.options&.dig(:delimiter))
+      },
+      string_agg_expression: lambda { |q, _t, d|
+        driver = Drivers.for(q.model.connection)
+        expr = driver.cast_to_string(d.expression)
+        driver.string_agg_expression(q, expr, d.options&.dig(:delimiter))
+      }
+    }.freeze
+
     def self.sql(relation, defn)
       q = relation.except(:select)
       t = q.model.arel_table
-      driver = Drivers.for(q.model.connection)
-      case defn.type
-      when :count
-        q.select(Arel.star.count).to_sql
-      when :count_expression
-        q.select(Arel.sql("COUNT(#{defn.expression})")).to_sql
-      when :count_distinct
-        q.select(t[defn.column].count(true)).to_sql
-      when :count_distinct_expression
-        q.select(Arel.sql("COUNT(DISTINCT #{defn.expression})")).to_sql
-      when :sum
-        q.select(Arel::Nodes::NamedFunction.new("COALESCE", [t[defn.column].sum, Arel::Nodes.build_quoted(0)])).to_sql
-      when :sum_expression
-        q.select(Arel.sql("COALESCE(SUM(#{defn.expression}), 0)")).to_sql
-      when :avg
-        q.select(Arel::Nodes::NamedFunction.new("COALESCE", [t[defn.column].average, Arel::Nodes.build_quoted(0.0)])).to_sql
-      when :avg_expression
-        q.select(Arel.sql("COALESCE(AVG(#{defn.expression}), 0.0)")).to_sql
-      when :min
-        q.select(Arel::Nodes::NamedFunction.new("COALESCE", [t[defn.column].minimum, Arel::Nodes.build_quoted(0)])).to_sql
-      when :min_expression
-        q.select(Arel.sql("COALESCE(MIN(#{defn.expression}), 0)")).to_sql
-      when :max
-        q.select(Arel::Nodes::NamedFunction.new("COALESCE", [t[defn.column].maximum, Arel::Nodes.build_quoted(0)])).to_sql
-      when :max_expression
-        q.select(Arel.sql("COALESCE(MAX(#{defn.expression}), 0)")).to_sql
-      when :string_agg
-        delim = defn.options&.dig(:delimiter)
-        driver.string_agg(q, t[defn.column], delim).to_sql
-      when :string_agg_expression
-        delim = defn.options&.dig(:delimiter)
-        # Use driver-specific cast for string expressions
-        expr = defn.expression
-        expr = driver.cast_to_string(expr)
-        driver.string_agg_expression(q, expr, delim).to_sql
-      else
-        raise "Unknown aggregate type: #{defn.type}"
-      end
+      builder = SQL_BUILDERS.fetch(defn.type) { raise "Unknown aggregate type: #{defn.type}" }
+      builder.call(q, t, defn).to_sql
     end
   end
 
@@ -318,35 +323,22 @@ module BatchAgg
       outer = @model.arel_table.alias("batchagg_outer_#{@model.table_name}")
       corr = AssocMagic.new(@model, outer)
       colproj = ColumnProj.new(outer, @model)
-      arel = Arel::SelectManager.new
-      arel.from(outer)
+      arel = Arel::SelectManager.new.from(outer)
       arel.project(outer[@model.primary_key].as(@model.primary_key.to_s))
+
       @aggs.reject(&:computed?).each do |agg|
-        proj =
-          if agg.custom?
-            Arel.sql(agg.expression.to_s).as(agg.name.to_s)
-          elsif agg.column_based?
-            colproj.build(agg, corr, **kwargs)
-          else
-            block = agg.block
-            relation = if block
-                         if block.parameters.any? { |type, _| %i[key keyreq keyrest].include?(type) }
-                           block.call(corr, **kwargs)
-                         else
-                           block.call(corr)
-                         end
-                       else
-                         scope
-                       end
-            Arel.sql("(#{AggSQL.sql(relation, agg)})").as(agg.name.to_s)
-          end
+        proj = if agg.custom?
+                 Arel.sql(agg.expression.to_s).as(agg.name.to_s)
+               elsif agg.column_based?
+                 colproj.build(agg, corr, **kwargs)
+               else
+                 relation = BatchAgg.call_with_optional_kwargs(agg.block, corr, **kwargs)
+                 Arel.sql("(#{AggSQL.sql(relation, agg)})").as(agg.name.to_s)
+               end
         arel.project(proj)
       end
-      arel.where(
-        outer[@model.primary_key].in(
-          Arel.sql("(#{scope.select(@model.primary_key).to_sql})")
-        )
-      )
+
+      arel.where(outer[@model.primary_key].in(Arel.sql("(#{scope.select(@model.primary_key).to_sql})")))
       arel
     end
   end
@@ -374,26 +366,14 @@ module BatchAgg
     end
 
     def combined(scope, **kwargs)
-      arel = Arel::SelectManager.new
-      projections = []
       magic_scope = CombinedAssocMagic.new(scope)
-
-      @aggs.reject(&:computed?).each do |agg|
-        relation = if agg.block
-                     if agg.block.parameters.any? { |type, _| %i[key keyreq keyrest].include?(type) }
-                       agg.block.call(magic_scope, **kwargs)
-                     else
-                       agg.block.call(magic_scope)
-                     end
-                   else
-                     scope
-                   end
-
+      projections = @aggs.reject(&:computed?).map do |agg|
+        relation = BatchAgg.call_with_optional_kwargs(agg.block, magic_scope, **kwargs)
         sql_string = AggSQL.sql(relation, agg)
-        projections << Arel.sql("(#{sql_string})").as(agg.name.to_s)
+        Arel.sql("(#{sql_string})").as(agg.name.to_s)
       end
 
-      arel.project(*projections)
+      arel = Arel::SelectManager.new.project(*projections)
       result_row = scope.klass.connection.select_one(arel.to_sql).to_h
       result_row = @driver.normalize_result(result_row)
       @result_class.new(result_row)
@@ -402,21 +382,22 @@ module BatchAgg
     private
 
     def build_result_class(aggs)
-      klass = Class.new do
+      Class.new do
         define_method(:initialize) do |row|
           @data = row.transform_keys(&:to_sym)
           @cache = {}
         end
-      end
-      aggs.reject(&:computed?).each do |agg|
-        klass.define_method(agg.name) { @data[agg.name] }
-      end
-      aggs.select(&:computed?).each do |agg|
-        klass.define_method(agg.name) do
-          @cache[agg.name] ||= instance_exec(self, &agg.block)
+
+        aggs.each do |agg|
+          if agg.computed?
+            define_method(agg.name) do
+              @cache[agg.name] ||= instance_exec(self, &agg.block)
+            end
+          else
+            define_method(agg.name) { @data[agg.name] }
+          end
         end
       end
-      klass
     end
   end
 
@@ -424,28 +405,37 @@ module BatchAgg
     attr_reader :aggs
 
     def initialize = @aggs = []
+
+    # Simple aggregates: count(name, &block)
+    %i[count computed].each do |type|
+      define_method(type) { |name, &block| add(type, name, block) }
+    end
+
+    # Column-based aggregates: sum(name, column, &block)
+    %i[sum avg min max count_distinct].each do |type|
+      define_method(type) { |name, column, &block| add(type, name, block, column: column) }
+    end
+
+    # Expression-based aggregates: sum_expression(name, expr, &block)
+    %i[sum_expression avg_expression min_expression max_expression count_expression count_distinct_expression].each do |type|
+      define_method(type) { |name, expr, &block| add(type, name, block, expression: expr) }
+    end
+
     def column(name, &block) = add(:column, name, block, column: name)
-    def count(name, &block) = add(:count, name, block)
-    def count_distinct(name, column, &block) = add(:count_distinct, name, block, column: column)
-    def count_expression(name, expr, &block) = add(:count_expression, name, block, expression: expr)
-    def count_distinct_expression(name, expr, &block) = add(:count_distinct_expression, name, block, expression: expr)
-    def sum(name, column, &block) = add(:sum, name, block, column: column)
-    def sum_expression(name, expr, &block) = add(:sum_expression, name, block, expression: expr)
-    def avg(name, column, &block) = add(:avg, name, block, column: column)
-    def avg_expression(name, expr, &block) = add(:avg_expression, name, block, expression: expr)
-    def min(name, column, &block) = add(:min, name, block, column: column)
-    def min_expression(name, expr, &block) = add(:min_expression, name, block, expression: expr)
-    def max(name, column, &block) = add(:max, name, block, column: column)
-    def max_expression(name, expr, &block) = add(:max_expression, name, block, expression: expr)
-    def string_agg(name, column, delimiter: nil, &block) = add(:string_agg, name, block, column: column, options: { delimiter: delimiter })
-    def string_agg_expression(name, expr, delimiter: nil, &block) = add(:string_agg_expression, name, block, expression: expr, options: { delimiter: delimiter })
-    def computed(name, &block) = add(:computed, name, block)
     def custom(name, sql) = add(:custom, name, nil, expression: sql)
+
+    def string_agg(name, column, delimiter: nil, &block)
+      add(:string_agg, name, block, column: column, options: { delimiter: delimiter })
+    end
+
+    def string_agg_expression(name, expr, delimiter: nil, &block)
+      add(:string_agg_expression, name, block, expression: expr, options: { delimiter: delimiter })
+    end
 
     private
 
-    def add(type, name, block, column: nil, expression: nil, options: nil)
-      @aggs << AggregateDef.new(name: name, type: type, block: block, column: column, expression: expression, options: options)
+    def add(type, name, block, **)
+      @aggs << AggregateDef.new(name: name, type: type, block: block, **)
     end
   end
 
