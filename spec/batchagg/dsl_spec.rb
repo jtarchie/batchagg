@@ -793,6 +793,8 @@ RSpec.shared_examples "batchagg dsl" do
       klass = aggregate(User) do
         count(:total_users)
         count(:total_posts, &:posts)
+        count(:with_name) { |scope| scope.where(name: "Alice") }
+        count(:with_name_scope) { |scope| scope.with_name("Alice") }
         sum(:total_views, :views, &:posts)
         avg(:avg_views, :views, &:posts)
         min(:min_views, :views, &:posts)
@@ -805,6 +807,8 @@ RSpec.shared_examples "batchagg dsl" do
       expect { @agg = klass.combined(User.all, value: "something") }.not_to exceed_query_limit(1)
 
       expect(@agg.total_users).to eq(2)
+      expect(@agg.with_name).to eq(1)
+      expect(@agg.with_name_scope).to eq(1)
       expect(@agg.total_posts).to eq(5) # 3 from Alice, 2 from Bob
       expect(@agg.total_views).to eq(150) # 10+20+30+40+50
       expect(@agg.avg_views.to_f).to eq(30.0) # 150/5
