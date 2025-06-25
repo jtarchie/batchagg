@@ -649,6 +649,9 @@ RSpec.shared_examples "batchagg dsl" do
       klass = aggregate(User) do
         count(:total_posts, &:posts)
         count(:posts_with_title) { |user_scope, title:| user_scope.posts.where(title: title) }
+        computed(:title) do |result, title:|
+          "title: #{title}, total_posts: #{result.total_posts}"
+        end
       end
 
       user = User.create!(name: "Alice")
@@ -661,6 +664,7 @@ RSpec.shared_examples "batchagg dsl" do
       expect { @agg = klass.only(user, title: "Post 1") }.not_to exceed_query_limit(1)
       expect(@agg[user.id].total_posts).to eq(11)
       expect(@agg[user.id].posts_with_title).to eq(1)
+      expect(@agg[user.id].title).to eq("title: Post 1, total_posts: 11")
 
       expect { @agg = klass.only(user, title: "Post 2") }.not_to exceed_query_limit(1)
       expect(@agg[user.id].total_posts).to eq(11)

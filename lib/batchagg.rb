@@ -356,12 +356,12 @@ module BatchAgg
       from(@model.where(@model.primary_key => record.id), **)
     end
 
-    def from(scope, **)
-      rows = scope.klass.connection.select_all(@query.build(scope, **).to_sql).to_a
+    def from(scope, **kwargs)
+      rows = scope.klass.connection.select_all(@query.build(scope, **kwargs).to_sql).to_a
       rows.each_with_object({}) do |row, h|
         row = @driver.normalize_result(row)
         id = row[@model.primary_key.to_s]
-        h[@model.primary_key ? id : row.keys.first] = @result_class.new(row)
+        h[@model.primary_key ? id : row.keys.first] = @result_class.new(row, **kwargs)
       end
     end
 
@@ -383,15 +383,21 @@ module BatchAgg
 
     def build_result_class(aggs)
       Class.new do
-        define_method(:initialize) do |row|
+        define_method(:initialize) do |row, **kwargs|
           @data = row.transform_keys(&:to_sym)
           @cache = {}
+          @kwargs = kwargs
         end
 
         aggs.each do |agg|
           if agg.computed?
             define_method(agg.name) do
-              @cache[agg.name] ||= instance_exec(self, &agg.block)
+              @cache[agg.name] ||= begin
+                # Pass kwargs if block accepts them
+                block = agg.block
+                has_kwargs = block.parameters.any? { |type, _| %i[key keyreq keyrest].include?(type) }
+                has_kwargs ? block.call(self, **@kwargs) : block.call(self)
+              end
             end
           else
             define_method(agg.name) { @data[agg.name] }
