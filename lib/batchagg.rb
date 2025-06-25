@@ -241,9 +241,18 @@ module BatchAgg
       def supports_cte?
         true # Assume modern DBs support CTEs by default
       end
+
+      def cte_materialized_keyword
+        ""
+      end
     end
 
     class Sqlite < Base
+      def cte_materialized_keyword
+        # SQLite supports MATERIALIZED since 3.35 (2021)
+        "MATERIALIZED "
+      end
+
       def string_agg(query, column, delimiter)
         args = [column]
         args << Arel::Nodes.build_quoted(delimiter) if delimiter
@@ -262,6 +271,10 @@ module BatchAgg
     end
 
     class Postgres < Base
+      def cte_materialized_keyword
+        "MATERIALIZED "
+      end
+
       def string_agg(query, column, delimiter)
         args = [column]
         args << Arel::Nodes.build_quoted(delimiter) if delimiter
@@ -414,11 +427,12 @@ module BatchAgg
       if @driver.supports_cte?
         cte_name = "batchagg_cte_#{@model.table_name}"
         cte_table = Arel::Table.new(cte_name)
+        cte_materialized = @driver.cte_materialized_keyword
         # Ensure we select all columns needed for joins
         cte_relation = scope.select(@model.column_names)
         cte = Arel::Nodes::As.new(
           cte_table,
-          Arel.sql("(#{cte_relation.to_sql})")
+          Arel.sql("#{cte_materialized}(#{cte_relation.to_sql})")
         )
 
         magic_scope = CteAssocMagic.new(@model, cte_table)
