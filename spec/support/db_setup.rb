@@ -38,30 +38,40 @@ DATABASES = [
   {
     name: "SQLite",
     config: { adapter: "sqlite3", database: ":memory:" }
-  },
-  {
-    name: "PostgreSQL",
-    config: {
-      adapter: "postgresql",
-      host: "127.0.0.1",
-      port: 54_321,
-      username: "postgres",
-      password: "pass",
-      database: "batchagg_test"
-    }
-  },
-  {
-    name: "MySQL",
-    config: {
-      adapter: "mysql2",
-      host: "127.0.0.1",
-      port: 33_061,
-      username: "root",
-      password: "pass",
-      database: "batchagg_test"
-    }
   }
 ].freeze
+unless ENV["SKIP_DOCKER"]
+
+  unless ENV["SKIP_POSTGRES"]
+    DATABASES << {
+      name: "PostgreSQL",
+      config: {
+        adapter: "postgresql",
+        host: "127.0.0.1",
+        port: 54_321,
+        username: "postgres",
+        password: "pass",
+        database: "batchagg_test"
+      }
+    }
+  end
+
+  unless ENV["SKIP_MYSQL"]
+    DATABASES << {
+      name: "MySQL",
+      config: {
+        adapter: "mysql2",
+        host: "127.0.0.1",
+        port: 33_061,
+        username: "root",
+        password: "pass",
+        database: "batchagg_test"
+      }
+    }
+  end
+
+  DATABASES.freeze
+end
 
 at_exit do
   system("docker rm -f batchagg_pg > /dev/null 2>&1") unless ENV["SKIP_POSTGRES"]
