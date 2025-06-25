@@ -97,12 +97,15 @@ RSpec.shared_examples "batchagg dsl" do
 
       it "performs basic count aggregations with single query" do
         klass = aggregate(User) do
+          count(:total_users)
           count(:total_posts, &:posts)
           count(:posts_with_title) { |user_scope| user_scope.posts.where(title: "Post 1") }
         end
 
         expect { @agg = klass.only(user) }.not_to exceed_query_limit(1)
 
+        expect(@agg.count).to eq(1)
+        expect(@agg[user.id].total_users).to eq(1)
         expect(@agg[user.id].total_posts).to eq(10)
         expect(@agg[user.id].posts_with_title).to eq(1)
       end
@@ -119,6 +122,7 @@ RSpec.shared_examples "batchagg dsl" do
 
       it "handles multiple users with single query" do
         klass = aggregate(User) do
+          count(:total_users)
           count(:total_posts, &:posts)
           count(:posts_with_title) { |user_scope| user_scope.posts.where(title: "Post 1") }
         end
@@ -126,8 +130,10 @@ RSpec.shared_examples "batchagg dsl" do
         expect { @results = klass.from(User.all) }.not_to exceed_query_limit(1)
 
         expect(@results.count).to eq(2)
+        expect(@results[user1.id].total_users).to eq(2)
         expect(@results[user1.id].total_posts).to eq(5)
         expect(@results[user1.id].posts_with_title).to eq(1)
+        expect(@results[user2.id].total_users).to eq(2)
         expect(@results[user2.id].total_posts).to eq(3)
         expect(@results[user2.id].posts_with_title).to eq(1)
       end
